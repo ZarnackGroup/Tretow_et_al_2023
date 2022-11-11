@@ -1,0 +1,512 @@
+---
+title: "Clustering BRCA samples based on cooperatively regulated CE and ALE events"
+author:
+- name: Mario Keller
+  affiliation: Faculty of Biological Sciences, Goethe University Frankfurt
+output:
+    BiocStyle::html_document:
+      toc: TRUE
+      toc_float: TRUE
+      code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE,
+                      crop=NULL, results = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(ComplexHeatmap)
+library(circlize)
+library(RColorBrewer)
+#library(egg)
+library(DESeq2)
+library(knitr)
+library(ggbeeswarm)
+library(kableExtra)
+library(missMDA)
+library(matrixStats)
+library(TCGAbiolinks)
+#library(ggpubr)
+```
+
+```{r defineTheme}
+myTheme <- theme_bw() +
+    theme(axis.text = element_text(size = 14, colour="black"),
+          axis.title = element_text(size=16, colour="black"),
+          axis.ticks=element_line(color="black"),
+          axis.ticks.length=unit(.15, "cm"),
+          panel.border=element_rect(color="black", fill = NA),
+          panel.background = element_blank(),
+          plot.background = element_blank(),
+          legend.text = element_text(size=12),
+          legend.position = "none")
+```
+
+```{r paths}
+projectDir <- "/Users/mariokeller/projects/HNRNPH_project/Tretow_et_al_2023"
+
+majiqDir <- paste0(projectDir, "/2_MAJIQ_AS_analysis")
+tcgaDir <- paste0(projectDir, "/8_TCGA_analysis")
+```
+
+# Background
+
+In *Correlation_HNRNPH_levels_and_splicing_events.Rmd* it could be shown
+that at least HNRNPH2 showed the expected correlation with the 
+cooperatively regulated CE and ALE events. As a final analysis we wanted
+to know whether PSI levels of the regulated events are different between
+normal and tumor samples as well as between PAM50 subtypes and, if so,
+whether they could be used for the discrimination of normal from tumor
+samples as well as of PAM50 subtypes.
+
+# Data
+
+Vst-transformed and batch corrected expression values are loaded from a
+RDS-File created with *Calculate_expression_BRCA.R*.
+
+Sample meta information is loaded from a RDS-File created with
+*Calculate_expression_BRCA.R*.
+
+PSI values of junctions of interest are loaded from a RDS-File created
+with *Calculate_PSIs_BRCA.R*.
+
+Regulated CE and ALE events are loaded from a RDS-File created with
+*MAJIQ_AS_analysis.Rmd*.
+
+```{r}
+
+vsdBatchCorrected<- readRDS(paste0(tcgaDir,"/rds_files/BRCA_vsdBatchCorrected.rds"))
+
+metaInformation <- readRDS(paste0(tcgaDir,"/rds_files/BRCA_metaInformation.rds"))
+
+PSIs <- readRDS(paste0(tcgaDir,"/rds_files/BRCA_PSI.rds"))
+
+regulatedCEs <- readRDS(paste0(majiqDir,"/rds_files/regulatedCEs.rds"))
+regulatedALEs <- readRDS(paste0(majiqDir,"/rds_files/regulatedALEs.rds"))
+```
+
+A data.frame with the expression levels of HNRNPH1 (ENSG00000169045.17)
+and HNRNPH2 (ENSG00000126945.8) is created.
+
+```{r}
+# Each row is a sample and columns are the samplebarcode and HNRNPH1 and HNRNPH2
+#   expression levels
+HNRNPHexpression <- data.frame(geneName=c("HNRNPH1", "HNRNPH2"),
+                               vsdBatchCorrected[match(c("ENSG00000169045.17",
+                                                         "ENSG00000126945.8"),
+                                                       rownames(vsdBatchCorrected)),] %>%
+                                   assay) %>%
+    pivot_longer(., cols=-1, names_to="tcgaSampleBarcode", values_to="vst") %>%
+    mutate(tcgaSampleBarcode=gsub(".", "-", tcgaSampleBarcode, fixed = T)) %>% 
+    pivot_wider(., names_from = geneName, values_from=vst)
+
+# The participant barcode and the sample type are added 
+HNRNPHexpression <- HNRNPHexpression %>% 
+    left_join(., metaInformation %>% dplyr::select(tcga.tcga_barcode,
+                                                   tcga.gdc_cases.submitter_id,
+                                                   tcga.gdc_cases.samples.sample_type),
+              by=c("tcgaSampleBarcode" = "tcga.tcga_barcode")) %>%
+    dplyr::rename(tcgaPatientBarcode = tcga.gdc_cases.submitter_id,
+           sampleType = tcga.gdc_cases.samples.sample_type)
+```
+
+PSI quantifications of the HNRNPH1 NMD isoform is extracted and stored
+separately.
+
+```{r}
+HNRNPH1nmdIsoformPSIs <- PSIs %>% dplyr::filter(eventType == "HNRNPH1nmdIsoform")
+```
+
+Splicing events are reduced to those of the category "Coop-Enh" and
+"Coop-Rep".
+
+```{r}
+# Remove the quantifications of the HNRNPH1 NMD Isoform and 
+#   the non-regulated CE events
+PSIs <- PSIs %>% 
+    dplyr::filter(hillCat %in% c("Coop-Enh", "Coop-Rep"))
+```
+
+For the upcoming analyses events with too many NAs and low dynamic are a
+problem. For this purpose, all events quantified in \< 100 samples and
+those that have across all patients less than 10 different PSI values
+are removed. The latter one are cases where for instance all patients
+have full inclusion.
+
+```{r}
+
+keep1 <- PSIs %>%
+    dplyr::count(eventID) %>%
+    dplyr::filter(n >= 100) %>%
+    pull(eventID)
+
+keep2 <- PSIs %>%
+    dplyr::count(eventID, PSI) %>%
+    dplyr::count(eventID) %>%
+    dplyr::filter(n >= 10) %>%
+    pull(eventID)
+
+keep <- intersect(keep1, keep2)
+
+PSIs <- PSIs %>% dplyr::filter(eventID %in% keep)
+
+```
+
+This procedure left `r PSIs$eventID %>% unique %>% length` events.
+
+# Preparation of the matrix and annotation vectors
+
+As some of the `r PSIs$eventID %>% unique %>% length` events have no
+quantification in some of the samples, their PSI values are imputed
+using the *imputePCA()* function of the *missMDA* package.
+
+```{r}
+
+# The PSI data.frame is turned into a matrix with 302 rows (events) and 
+#   1177 columns (BRCA samples)
+mat <- PSIs %>%
+    dplyr::select(eventID, tcgaSampleBarcode, PSI) %>%
+    arrange(eventID, tcgaSampleBarcode) %>%
+    pivot_wider(names_from=tcgaSampleBarcode, values_from = PSI) %>% 
+    column_to_rownames("eventID") %>%
+    as.matrix
+
+# Missing values are imputed
+mat <- imputePCA(mat %>% t, ncp=2)
+mat <- mat$completeObs %>% t
+
+# Z-score transformation
+matZscore <- (mat  - (mat %>% rowMeans(., na.rm=T))) / rowSds(mat, na.rm=T)
+```
+
+In the final Heatmap column as well as row annotation should be shown.
+These will include:
+
+Column (samples):
+
+-   The Inclusion levels of the HNRNPH1 NMD isoform (high = functional,
+    low = NMD)
+
+-   HNRNPH1 expression levels
+
+-   HNRNPH2 expression levels
+
+-   Sample type (Primary Tumor and Solid Tissue Normal)
+
+-   PAM50 subtype (Basal, Her2, LumA, LumB and Normal)
+
+Row (events):
+
+-   Hill category (Coop-Enh and Coop-Rep)
+
+-   dPSI in the strongest knockdown (10 nM)
+
+```{r}
+
+# Column
+
+# HNRNPH1 NMD isoform levels. Note that 9 samples have no quantification
+#   leading to a NA in the vector
+colAnnoHNRNPH1nmd <- HNRNPH1nmdIsoformPSIs$PSI[
+    match(colnames(matZscore),HNRNPH1nmdIsoformPSIs$tcgaSampleBarcode)]
+
+# HNRNPH1/2 expression
+colAnnoHNRNPH1expr <- HNRNPHexpression$HNRNPH1[
+    match(colnames(matZscore), HNRNPHexpression$tcgaSampleBarcode)]
+colAnnoHNRNPH2expr <- HNRNPHexpression$HNRNPH2[
+    match(colnames(matZscore), HNRNPHexpression$tcgaSampleBarcode)]
+
+# sample type
+colAnnoSampleType <- PSIs$sampleType[
+    match(colnames(matZscore), PSIs$tcgaSampleBarcode)]
+
+# PAM50 subtype via PanCancerAtlas_subtypes() of the TCGAbiolinks package
+colAnnoPAM50subtype <- PanCancerAtlas_subtypes() %>%
+    dplyr::filter(cancer.type=="BRCA")
+colAnnoPAM50subtype <- colAnnoPAM50subtype$Subtype_mRNA[
+    match(colnames(matZscore),colAnnoPAM50subtype$pan.samplesID)]
+
+# Row 
+
+#  Hill category
+rowAnnoHillCategory <- PSIs$hillCat[match(rownames(matZscore), PSIs$eventID)]
+
+# Strongest knockdown
+rowAnnoStongestKD <- rbind(
+    regulatedCEs %>%
+        dplyr::select(event_id, KD_10000.KD_Contr_median_dpsi),
+    regulatedALEs %>%
+        dplyr::select(event_id, KD_10000.KD_Contr_median_dpsi))
+
+rowAnnoStongestKD <- rowAnnoStongestKD$KD_10000.KD_Contr_median_dpsi[
+    match(rownames(matZscore), rowAnnoStongestKD$event_id)]
+
+```
+
+# Heatmap with Clustering
+
+```{r fig.width=10, fig.height=8}
+
+myCol <- colorRamp2(c(-1.5, -.75, 0, .75, 1.5),
+                    brewer.pal(n = 5, name = "RdYlBu") %>% rev)
+
+colAnno = HeatmapAnnotation(
+    HNRNPH1nmd = anno_lines(colAnnoHNRNPH1nmd, gp = gpar(col = "blue"),
+                            height = unit(1.25, "cm")),
+    HNRNPH1expr = anno_lines(colAnnoHNRNPH1expr, gp = gpar(col = "blue4"),
+                             height = unit(1.25, "cm")),
+    HNRNPH2expr = anno_lines(colAnnoHNRNPH2expr, gp = gpar(col = "chartreuse4"),
+                             height = unit(1.25, "cm")),
+    sampleType = colAnnoSampleType,
+    subType = colAnnoPAM50subtype,
+    col=list(sampleType = c("Solid Tissue Normal" = "black",
+                            "Primary Tumor" = "#f54c4c"),
+             subType = c("Normal"="blue3", "LumA"="chocolate2",
+                         "LumB"="cyan3", "Her2"="darkmagenta",
+                         "Basal"="darkgreen", "NA"="grey")),
+    show_annotation_name=T, border=T,
+    annotation_legend_param=list(nrow=1))
+
+rowAnno = rowAnnotation(hillCat = rowAnnoHillCategory,
+                        strongestKDpsi = anno_lines(cbind(0, rowAnnoStongestKD),
+                                                    gp = gpar(col = c("black", "brown"),
+                                                              lty=c("dashed", "solid")),
+                                                    width = unit(1.25, "cm"),
+                                                    ylim=c(-.5, .5)),
+                        col=list(hillCat=c("Coop-Enh"="cornflowerblue",
+                                           "Coop-Rep"="salmon2")),
+                        show_annotation_name=T, border=T,
+                        annotation_label=c("nH", "dPSI KD"),
+                        annotation_legend_param=list(nrow=1))
+
+set.seed(1)
+colClusters <- kmeans(matZscore %>% t, centers=5)
+colClusterRenaming <- c("C1" = 1, "C2" = 3, "C3" = 2, "C4" = 4, "C5" = 5)
+colClusters$cluster <- names(colClusterRenaming)[match(colClusters$cluster,
+                                                             colClusterRenaming)]
+
+rowClusters <- kmeans(matZscore, centers=5)
+rowClusterRenaming <- c("R1" = 2, "R2" = 1, "R3" = 4, "R4" = 5, "R5" = 3)
+rowClusters$cluster <- names(rowClusterRenaming)[match(rowClusters$cluster,
+                                                       rowClusterRenaming)]
+
+hm <- Heatmap(matZscore,  col=myCol,
+              cluster_rows = F, cluster_columns = F,
+              show_row_names =F, show_column_names = F,
+              show_row_dend = F, show_column_dend = F,
+              row_split = rowClusters$cluster, cluster_row_slices = T,
+              column_split = colClusters$cluster, cluster_column_slices = T,
+              top_annotation = colAnno, right_annotation = rowAnno,
+              row_names_gp = gpar(fontsize = 3),
+              heatmap_legend_param = list(legend_direction = "horizontal",
+                                          title="z-score(PSI)"),
+              border=T, use_raster = TRUE, raster_quality = 5)
+
+draw(hm, annotation_legend_side = "top", heatmap_legend_side="bottom")
+```
+
+# Summary of row and column annotations
+
+From the Heatmap annotations certain trends can be captured for row and
+column clusters such as lower HNRNPH2 levels for the clusters C1 and C5.
+
+To better capture these trends and differences between clusters, each
+row and column annotation is examined in more detail.
+
+## HNRNPH1 NMD isoform and HNRNPH1/2 expression levels
+
+```{r}
+
+data.frame(HNRNPH1expr=colAnnoHNRNPH1expr,
+           cluster=factor(colClusters$cluster, levels=paste0("C", 1:5))) %>%
+    ggplot(., aes(x=cluster, y=HNRNPH1expr)) + #, fill=gene, col=gene)) +
+        geom_quasirandom() +
+        geom_boxplot(alpha=.5, outlier.size = -1, col="black") +
+        labs(y="HNRNPH1 expression (vst)") +
+        myTheme + theme(aspect.ratio=1)
+        
+data.frame(HNRNPH2expr=colAnnoHNRNPH2expr,
+           cluster=factor(colClusters$cluster, levels=paste0("C", 1:5))) %>%
+    ggplot(., aes(x=cluster, y=HNRNPH2expr)) + #, fill=gene, col=gene)) +
+        geom_quasirandom() +
+        geom_boxplot(alpha=.5, outlier.size = -1, col="black") +
+        labs(y="HNRNPH2 expression (vst)") +
+        myTheme + theme(aspect.ratio=1)        
+        
+data.frame(HNRNPH1nmd=colAnnoHNRNPH1nmd,
+           cluster=factor(colClusters$cluster, levels=paste0("C", 1:5))) %>%
+    ggplot(., aes(x=cluster, y=HNRNPH1nmd)) + #, fill=gene, col=gene)) +
+        geom_quasirandom() +
+        geom_boxplot(alpha=.5, outlier.size = -1, col="black") +
+        labs(y="PSI of functional junction\n(HNRNPH1 NMD event)") +
+        myTheme + theme(aspect.ratio=1)
+
+
+        
+```
+
+## Fraction of PAM50 subtypes
+
+```{r}
+data.frame(subType=factor(colAnnoPAM50subtype,
+                          levels=c("Basal", "Her2", "LumA",
+                                   "LumB", "Normal") %>% rev),
+           cluster=factor(colClusters$cluster, levels=paste0("C", 1:5))) %>%
+    ggplot(., aes(x=cluster, fill=subType)) + #, fill=gene, col=gene)) +
+        geom_bar(position="fill") +
+        scale_fill_manual(values=c("Normal"="blue3", "LumA"="chocolate2",
+                                   "LumB"="cyan3", "Her2"="darkmagenta",
+                                   "Basal"="darkgreen", "NA"="grey")) +
+        labs(y="Fraction of samples in cluster", x="Column clusters") +
+        myTheme + theme(legend.position = "right", aspect.ratio = 1) 
+```
+
+## Fraction of enhanced and repressed events
+
+```{r}
+data.frame(subType=factor(rowAnnoHillCategory, levels=c("Coop-Rep",
+                                                        "Coop-Enh")),
+           cluster=factor(rowClusters$cluster, levels=paste0("R", 1:5))) %>%
+    ggplot(., aes(x=cluster, fill=subType)) + #, fill=gene, col=gene)) +
+        geom_bar(position="fill") +
+        scale_fill_manual(values=c("Coop-Enh"="cornflowerblue",
+                                   "Coop-Rep"="salmon2")) +
+        labs(y="Fraction of events in cluster", x="Row clusters") +
+        myTheme + theme(legend.position = "right", aspect.ratio = 1)
+```
+
+## Effect of strongest knockdown (10 nM)
+
+```{r}
+data.frame(knockdowndPSI=rowAnnoStongestKD,
+           hillCat = rowAnnoHillCategory,
+           cluster=factor(rowClusters$cluster,levels=paste0("R", 1:5)))  %>%
+ggplot(., aes(x=cluster, y=knockdowndPSI, fill=hillCat, col=hillCat)) +
+    geom_quasirandom(dodge.width = 0.9) +
+    geom_boxplot(alpha=.5, outlier.size = -1, col="black",
+                 position = position_dodge(width = 0.9)) +
+    coord_cartesian(ylim=c(-.5, .5)) +
+    scale_color_manual(values=c("Coop-Enh"="cornflowerblue",
+                                "Coop-Rep"="salmon2")) +
+    scale_fill_manual(values=c("Coop-Enh"="cornflowerblue",
+                               "Coop-Rep"="salmon2")) +
+    labs(y="Change in strongest knockdown (dPSI)") +
+    myTheme + theme(legend.position = "right", aspect.ratio = 1)
+```
+
+## Z-scored PSIs
+
+```{r}
+lapply(1:nrow(matZscore), function(i){
+    data.frame(columnCluster=colClusters$cluster,
+               rowCluster=rowClusters$cluster[i],
+               zPSI=matZscore[i,])
+}) %>% bind_rows() %>% 
+    ggplot(., aes(x=columnCluster, y=zPSI)) +
+    geom_boxplot(alpha=.5, outlier.size = -1, col="black", fill="darkgrey") +
+    coord_cartesian(ylim=c(-3.5, 3.5)) +
+    labs(y="z-score(PSI)", x="Column clusters") +
+    facet_wrap(~rowCluster) +
+    myTheme + theme(aspect.ratio = 1)
+```
+
+## Quality of clustering
+
+From the Heatmap it became clear that the cooperatively regulated CE and
+ALE events have the potential to separater normal from tumor samples as
+well as to separate the Basal subtype samples from the other samples.
+
+One way to quantify the separation capability is the adjusted Rand
+index, which was designed to compare two classifications. The adjusted
+Rand index was compute once for the separation of normal from tumor\
+samples and once for the separation of the Basal subtype samples from
+the other samples. To test \
+whether the cooperatively regulated events lead to a better separation
+than a set of random splicing events, 100 sets of randomly picked
+non-regulated CE events with a similar set size were used for clustering
+and calculation of the two adjusted Rand indices. The calculation was
+done in the Rscript called *Calculate_adjusted_Rand_Indices.R*
+
+The following procedure was followed for the set of cooperatively
+regulated CE and ALE events and the 100 random sets of non-regulated CE
+events.
+
+1.  Create a PSI matrix (rows are the events and columns the BRCA
+    samples)
+
+2.  Impute missing values in the matrix
+
+3.  Z-score transformation
+
+4.  For each column (BRCA sample) store the sample type and PAM50
+    subtype
+
+5.  Perform k-means clustering (k=5)
+
+6.  Adjusted Rand Index for the separation of normal from tumor samples
+
+    1.  Determine the cluster with the highest number of normal samples
+        and label it as "C_Normal"
+
+    2.  All other clusters are labeled as "C_Other"
+
+    3.  Calculate the adjusted Rand Index by using the sample type
+        (normal and tumor) as first class label and the new cluster
+        labels (C_Normal and C_Other) as second class label
+
+7.  Adjusted Rand Index for the separation of Basal subtype samples from
+    the other samples
+
+    1.  Determine the cluster with the highest number of Basal subtype
+        samples and label it as "C_Basal"
+
+    2.  All other clusters are labeled as "C_Other"
+
+    3.  Change the PAM50 subtype of samples other than Basal to "Other"
+
+    4.  Calculate the adjusted Rand Index by using the PAM50 subtype
+        (Basak and Other) as first class label and the new cluster
+        labels (C_Basaland C_Other) as second class label
+
+An adjusted Rand index of 0 means random partition, while a value of 1
+means perfect agreement (separation). Below is a scatterplot showing the
+adjusted Rand index for the separation of the normal samples on th
+x-axis and the adjusted Rand index for the separation of the Basal
+subtype samples on the y-axis. Shown is the set of cooperarively
+regulated CE and ALE events (the ones from the Heatmap above) and the
+100 sets of randomly picked non-regulated CE events. One can nicely see
+that the regulated events achieve for both adjusted Rand indices the
+highest value, meaning they achieve a better separation than random
+splicing events.
+
+```{r}
+adjustedRandIndices <- readRDS(paste0(tcgaDir,
+                                      "/rds_files/adjustedRandIndices.rds"))
+
+adjustedRandIndices <- adjustedRandIndices %>% 
+    mutate(setLabel = ifelse(setLabel == "reg",
+                             "regulated",
+                             "random non-regulated"))
+
+adjustedRandIndices %>%
+        ggplot(., aes(x=normalAdjustedRandIndex, y=basalAdjustedRandIndex, fill=setLabel)) +
+        geom_point(size=4, shape=21) +
+        scale_fill_manual("events", values=c("regulated" = "black",
+                                             "random non-regulated" = "darkgrey")) +
+        coord_cartesian(xlim=c(0, 1), ylim=c(0, 1)) +
+        myTheme + theme(legend.position = "bottom", aspect.ratio=1) +
+        labs(x="Adjusted Rand Index\nnormal samples",
+             y="Adjusted Rand Index\nBasal samples") + 
+        guides(fill = guide_legend(title.position = "top", title.hjust = 0.5))
+```
+
+# Session Information
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,423 @@
+---
+title: "Dependence of HNRNPH binding and cooperativity on rG4s"
+author:
+- name: Mario Keller
+  affiliation: Faculty of Biological Sciences, Goethe University Frankfurt
+output:
+    BiocStyle::html_document:
+      toc: TRUE
+      toc_float: TRUE
+      code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE,
+                      crop=NULL, results = TRUE)
+```
+
+```{r libraries}
+library(tidyverse)
+library(knitr)
+library(ggpubr)
+library(ggsci)
+library(ggbeeswarm) 
+library(ggrastr)
+library(GenomicRanges)
+library(BSgenome.Hsapiens.UCSC.hg38)
+```
+
+```{r defineTheme}
+myTheme <- theme_bw() +
+    theme(axis.text = element_text(size = 14, colour="black"),
+          axis.title = element_text(size=16, colour="black"),
+          axis.ticks=element_line(color="black"),
+          axis.ticks.length=unit(.15, "cm"),
+          panel.border=element_rect(color="black", fill = NA),
+          panel.background = element_blank(),
+          plot.background = element_blank(),
+          legend.text = element_text(size=12),
+          legend.position = "none")
+```
+
+```{r paths}
+projectDir <- "/Users/mariokeller/projects/HNRNPH_project/Tretow_et_al_2023"
+
+iClipDir <- paste0(projectDir, "/4_iCLIP_analysis")
+rG4Dir <- paste0(projectDir, "/5_rG4_analysis")
+```
+
+# Background
+
+In *Sequence_composition_of_binding_sites.Rmd* it became clear that
+HNRNPH binding is enriched at G-stretches. To elucidate a potential role
+of rG4s on the binding of HNRNPH and the cooperative regulation of CE
+events, binding site strength and the Hill coefficients of cooperatively
+regulated CE events are correlated with the presence and absence of
+rG4s.
+
+# Data
+
+HNRNPH binding sites are loaded from a RDS-File created with
+*Binding_site_definition.R*.
+
+Regulated and non-regulated CE minigenes are loaded from RDS-Files
+created with *Create_CE_minigenes.R*.
+
+Predicted rG4s in regulated CE events and non-regulated CE events as
+well as around binding sites are loaded from RDS-Files created with
+*rG4_prediction.R*.
+
+```{r}
+bindingSites <- readRDS(paste0(iClipDir,
+                               "/rds_files/HNRNPH_binding_sites.rds"))
+
+regulatedMiniGenes <- readRDS(paste0(iClipDir, "/rds_files/regulatedMiniGenes.rds"))
+nonRegulatedMiniGenes <- readRDS(paste0(iClipDir, "/rds_files/nonregulatedMiniGenes.rds"))
+
+# The predicted rG4s are stored in RDS-Files
+regulatedMiniGenesG4s <- readRDS(paste0(rG4Dir,
+                                        "/rds_files/regulatedMiniGenesG4s.rds"))
+nonRegulatedMiniGenesG4s <- readRDS(paste0(rG4Dir,
+                                           "/rds_files/nonRegulatedMiniGenesG4s.rds"))
+bindingSitesG4s <- readRDS(paste0(rG4Dir,
+                                  "/rds_files/bindingSitesG4s.rds"))
+
+```
+
+The introns (between C1 and A as well as between A and C2) are added to
+each GRanges object.
+
+```{r}
+regulatedMiniGenes <- regulatedMiniGenes %>% lapply(., function(gr){
+    tmp <- gaps(gr, start=NA, end=NA)
+    mcols(tmp) <- mcols(gr)[1:2,]
+    if(strand(tmp) %>% unique == "+"){
+    tmp$exon <- c("I1", "I2")
+    } else {
+    tmp$exon <- c("I2", "I1")
+    }
+    gr <- c(gr, tmp)
+    return(gr)
+}) %>% as(., "GRangesList")
+
+nonRegulatedMiniGenes <- nonRegulatedMiniGenes %>% lapply(., function(gr){
+  tmp <- gaps(gr, start=NA, end=NA)
+  mcols(tmp) <- mcols(gr)[1:2,]
+  if(strand(tmp) %>% unique == "+"){
+    tmp$exon <- c("I1", "I2")
+  } else {
+    tmp$exon <- c("I2", "I1")
+  }
+  gr <- c(gr, tmp)
+  return(gr)
+}) %>% as(., "GRangesList")
+```
+
+rG4s located in CE events are loaded as a list, where each list entry is
+a GRanges object comprising the predicted rG4s of a single CE event. The
+list is resolved using unlist(), followed by removeal of duplcated rG4s.
+Duplicates may arise when there are overlapping CE events due to
+overlapping genes on the same strand (e.g if there is gene readthrough).
+
+```{r}
+
+regulatedMiniGenesG4s <- regulatedMiniGenesG4s %>%
+    as(., "GRangesList") %>%
+    unlist
+regulatedMiniGenesG4s <- regulatedMiniGenesG4s[!duplicated(regulatedMiniGenesG4s)]
+
+nonRegulatedMiniGenesG4s <- nonRegulatedMiniGenesG4s %>%
+    as(., "GRangesList") %>%
+    unlist
+nonRegulatedMiniGenesG4s <- nonRegulatedMiniGenesG4s[!duplicated(nonRegulatedMiniGenesG4s)]
+```
+
+# The effect of G-stretches and rG4 propensity on binding strength
+
+From the analyses in *Sequence_composition_of_binding_sites.Rmd* it
+became clear that there is an enrichment of G-triplats (GGG) in and
+around strong binding sites. To obtain insights on the impact of
+G-stretches and their location in predicted rG4s on binding, the
+`r format(length(bindingSites), big.mark=",")` binding sites were
+assigned to one of the following four groups:
+
+1.  contains no G-triplet and does not overlap a predicted rG4 (-/-)
+2.  contains no G-triplet and overlaps a predicted rG4 (-/+)
+3.  contains a G-triplet and does not overlap a predicted rG4 (+/-)
+4.  contains a G-triplet and overlaps a predicted rG4 (+/+)
+
+For each of the four groups the PureCLIP score distribution was
+examined.
+
+```{r}
+bindingSitesRSS <- RNAStringSet(getSeq(Hsapiens, bindingSites))
+bindingSites$group <- "-/-"
+bindingSites$group[vmatchPattern("GGG", bindingSitesRSS) %>% lengths > 0] <- "+/-"
+
+bindingSites$group[countOverlaps(bindingSites, bindingSitesG4s) > 0 & bindingSites$group == "+/-"] <- "+/+"
+bindingSites$group[countOverlaps(bindingSites, bindingSitesG4s) > 0 & bindingSites$group == "-/-"] <- "-/+"
+
+data.frame(group=bindingSites$group, score=bindingSites$score) %>%
+    mutate(group=factor(group, levels=c("-/-", "-/+", "+/-", "+/+"))) %>%
+    ggplot(., aes(x=group, y=log2(score), col=group, fill=group))+
+        ggrastr::rasterise(geom_quasirandom(dodge.width = 0.9), dpi=300) +
+        geom_boxplot(alpha=.5, outlier.size = -1, col="black", position = position_dodge(width = 0.9)) +
+        scale_color_manual(values=c("-/-" = "grey", "-/+" = "#F49738", "+/-" = "#CB6615", "+/+" = "#9A3415")) +
+        scale_fill_manual(values=c("-/-" = "grey", "-/+" = "#F49738", "+/-" = "#CB6615", "+/+" = "#9A3415")) +
+        stat_compare_means(method="kruskal.test", vjust=-2, hjust=0.1, size=3) +
+        coord_cartesian(ylim=c(0,10.5)) +
+        labs(y="PureClip score (log2)", x="G-triplet / rG4") +
+        myTheme +
+        theme(legend.position = "none", aspect.ratio = 1/.6)
+```
+
+Here is the underlying data.frame as a table:
+
+```{r}
+
+bindingSites %>%
+    as.data.frame %>%
+    dplyr::count(group) %>%
+    kable(., "html") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(width = "94%")
+```
+
+One can see that binding sites are stronger if located on G-triplets in
+predicted rG4s.
+
+# rG4s overlapping CE events
+
+In the final analysis it was of interest to check whether the three sets
+(Coop-Enh, Cooop-Rep and nonReg) show differences in terms of the
+presence/absence of rG4s in the AEs and intron regions that showed
+strong signal differences in the HNRNPH iCLIP RNAmaps. The intronic
+regions comprise the 3' end of the upstream (I1) intron and the the 5'
+and 3' end of the downstream intron (I2). The three intronic regions are
+combined as the "intronic" region. At maximum I went 300nt in the
+intronic regions.
+
+```{r}
+
+# Create a vector containing the Hill categories
+hillCat <- regulatedMiniGenes %>% sapply(., function(gr){gr$hillCat[1]})
+
+# Create GRanges objects for the alternative exons (AE), upstream intron
+#   end (I1end) as well a the start (I2start) and end (I2end) of the downstream
+#   exon for the cooperatively regulated CE events and non-regulated CE events
+
+# Coop-Enh
+AE_CoopEnh <- endoapply(regulatedMiniGenes[hillCat == "Coop-Enh"],
+                         function(gr){gr[gr$exon=="A"]}) %>% unlist
+I1end_CoopEnh <- endoapply(regulatedMiniGenes[hillCat == "Coop-Enh"],
+                           function(gr){gr[gr$exon=="I1"] %>%
+                                   resize(., min(width(.), 300), fix="end")}) %>% unlist
+I2start_CoopEnh <- endoapply(regulatedMiniGenes[hillCat == "Coop-Enh"],
+                           function(gr){gr[gr$exon=="I2"] %>%
+                                   resize(., min(width(.), 300), fix="start")}) %>% unlist
+I2end_CoopEnh <- endoapply(regulatedMiniGenes[hillCat == "Coop-Enh"],
+                           function(gr){gr[gr$exon=="I2"] %>%
+                                   resize(., min(width(.), 300), fix="end")}) %>% unlist
+
+# Coop-Rep
+AE_CoopRep <- endoapply(regulatedMiniGenes[hillCat == "Coop-Rep"],
+                         function(gr){gr[gr$exon=="A"]}) %>% unlist
+I1end_CoopRep <- endoapply(regulatedMiniGenes[hillCat == "Coop-Rep"],
+                           function(gr){gr[gr$exon=="I1"] %>%
+                                   resize(., min(width(.), 300), fix="end")}) %>% unlist
+I2start_CoopRep <- endoapply(regulatedMiniGenes[hillCat == "Coop-Rep"],
+                           function(gr){gr[gr$exon=="I2"] %>%
+                                   resize(., min(width(.), 300), fix="start")}) %>% unlist
+I2end_CoopRep <- endoapply(regulatedMiniGenes[hillCat == "Coop-Rep"],
+                           function(gr){gr[gr$exon=="I2"] %>%
+                                   resize(., min(width(.), 300), fix="end")}) %>% unlist
+
+# nonReg
+AE_nonReg <- endoapply(nonRegulatedMiniGenes,
+                        function(gr){gr[gr$exon=="A"]}) %>% unlist
+I1end_nonReg <- endoapply(nonRegulatedMiniGenes,
+                           function(gr){gr[gr$exon=="I1"] %>%
+                                   resize(., min(width(.), 300), fix="end")}) %>% unlist
+I2start_nonReg <- endoapply(nonRegulatedMiniGenes,
+                           function(gr){gr[gr$exon=="I2"] %>%
+                                   resize(., min(width(.), 300), fix="start")}) %>% unlist
+I2end_nonReg <- endoapply(nonRegulatedMiniGenes,
+                           function(gr){gr[gr$exon=="I2"] %>%
+                                   resize(., min(width(.), 300), fix="end")}) %>% unlist
+```
+
+```{r}
+
+# Count the number of overlapping predicted rG4s for each alternative exon (AE)
+#   and the three intronic regions. Counts of the intronc regions are combined.
+G4freqDf <- rbind(
+    data.frame(hillCat = "Coop-Enh",
+               facet = "AE",
+               rG4freq = countOverlaps(AE_CoopEnh, regulatedMiniGenesG4s),
+               nH = regulatedMiniGenes[hillCat == "Coop-Enh"] %>% 
+                   sapply(., function(gr){gr$nH[1]})),
+    data.frame(hillCat = "Coop-Rep",
+               facet = "AE",
+               rG4freq = countOverlaps(AE_CoopRep, regulatedMiniGenesG4s),
+               nH = regulatedMiniGenes[hillCat == "Coop-Rep"] %>% 
+                   sapply(., function(gr){gr$nH[1]})),
+    data.frame(hillCat = "nonReg",
+               facet = "AE",
+               rG4freq = countOverlaps(AE_nonReg, nonRegulatedMiniGenesG4s),
+               nH = NA),
+    data.frame(hillCat = "Coop-Enh",
+               facet = "Intronic",
+               rG4freq = countOverlaps(I1end_CoopEnh, regulatedMiniGenesG4s) +
+                   countOverlaps(I2start_CoopEnh, regulatedMiniGenesG4s) +
+                   countOverlaps(I2end_CoopEnh, regulatedMiniGenesG4s),
+               nH = regulatedMiniGenes[hillCat == "Coop-Enh"] %>% 
+                   sapply(., function(gr){gr$nH[1]})),
+    data.frame(hillCat = "Coop-Rep",
+               facet = "Intronic",
+               rG4freq = countOverlaps(I1end_CoopRep, regulatedMiniGenesG4s) +
+                   countOverlaps(I2start_CoopRep, regulatedMiniGenesG4s) +
+                   countOverlaps(I2end_CoopRep, regulatedMiniGenesG4s),
+               nH = regulatedMiniGenes[hillCat == "Coop-Rep"] %>% 
+                   sapply(., function(gr){gr$nH[1]})),
+    data.frame(hillCat = "nonReg",
+               facet = "Intronic",
+               rG4freq = countOverlaps(I1end_nonReg, nonRegulatedMiniGenesG4s) +
+                   countOverlaps(I2start_nonReg, nonRegulatedMiniGenesG4s) +
+                   countOverlaps(I2end_nonReg, nonRegulatedMiniGenesG4s),
+               nH = NA)
+)
+
+# Combine counts >2
+G4freqDf$rG4freq[G4freqDf$rG4freq > 2] <- ">2"
+G4freqDf$rG4freq <- factor(G4freqDf$rG4freq, levels=c("0", "1", "2", ">2"))
+
+# Create a stacked barchart showing the fraction of CE events with a certain
+#   number of overlapping rG4s
+G4freqDf %>% 
+    ggplot(., aes(x=hillCat, fill=rG4freq)) +
+        geom_bar(position="fill") +
+        scale_fill_lancet() +
+        facet_wrap(~facet, ncol=2) +
+        labs(y="Fraction of minigenes") +
+        myTheme +
+        theme(legend.position = "right",
+              axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))
+```
+
+Here is the underlying data.frame as a table:
+
+```{r}
+
+G4freqDf %>%
+    dplyr::count(hillCat, facet, rG4freq) %>%
+    group_by(hillCat, facet) %>%
+    mutate(fraction = n/sum(n)) %>%
+    ungroup %>%
+    kable(., "html") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(height="300px", width = "94%")
+```
+
+The fraction of CE events with at least one predicted rG4 overlapping the
+cassette/alternative exon is highest for the cooperatively repressed
+events, while there are nearly no non-regulated CE events with a predicted
+rG4 overlapping the cassette/alternative exon.
+
+The fraction of CE events with at least one predicted rG4 overlapping the
+intronic regions is highest for the cooperatively enhanced events and
+lowest for the non-regulated events. There is also a substantial fraction
+of enhanced CE events with more than two predicted rG4s in the intronic
+regions.
+
+
+# Dependence of Hill coefficient on the presence of rG4s
+
+After observing a high density of predicted rG4s overlapping the
+alternative exon of cooperatively repressed CE events and in the
+intronic regions of cooperatively enhanced events, it was of interest
+whether the degree of cooperativity depends on the presence of predicted
+rG4s.
+
+To answer this question, repressed and enhanced CE events were each
+grouped into five quantiles (0-20%, 20-40%, 40-60%, 60-80% and 80-100%)
+based on the fitted Hill coefficient (nH). Afterwards the five groups of
+repressed CE events were compared for the presence of predicted rG4s
+overlapping the alternative exon and the five groups of enhanced CE
+events for the presence of predicted rG4s in the intron regions.
+
+Here is the plot and the underlying data.frame for the repressed CE
+events:
+
+```{r}
+plotDf <- G4freqDf %>% dplyr::filter(hillCat == "Coop-Rep",
+                           facet=="AE")
+plotDf$nHquantile <- cut(abs(plotDf$nH),
+                         breaks=abs(plotDf$nH) %>% quantile(., seq(0,1,0.2)),
+                         include.lowest = TRUE,
+                         labels=c("0-20%","20-40%","40-60%","60-80%","80-100%"))
+
+plotDf %>%
+    ggplot(., aes(x=nHquantile, fill=rG4freq)) +
+    scale_fill_lancet() +
+    geom_bar(position="fill") +
+    labs(y="Fraction with predicted rG4") +
+    myTheme +
+    theme(legend.position = "bottom",
+          aspect.ratio=1/.75,
+          axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))
+
+plotDf %>% dplyr::count(nHquantile, rG4freq) %>%
+    group_by(nHquantile) %>%
+    mutate(fraction = n/sum(n)) %>%
+    ungroup %>%
+    kable(., "html") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(height="300px", width = "94%")
+
+```
+
+Here is the plot and the underlying data.frame for the enhanced CE
+events:
+
+```{r}
+
+plotDf <- G4freqDf %>% dplyr::filter(hillCat == "Coop-Enh",
+                           facet=="Intronic")
+plotDf$nHquantile <- cut(abs(plotDf$nH),
+                         breaks=abs(plotDf$nH) %>% quantile(., seq(0,1,0.2)),
+                         include.lowest = TRUE,
+                         labels=c("0-20%","20-40%","40-60%","60-80%","80-100%"))
+
+plotDf %>%
+    ggplot(., aes(x=nHquantile, fill=rG4freq)) +
+    scale_fill_lancet() +
+    geom_bar(position="fill") +
+    labs(y="Fraction with predicted rG4") +
+    myTheme +
+    theme(legend.position = "bottom",
+          aspect.ratio=1/.75,
+          axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))
+
+plotDf %>% dplyr::count(nHquantile, rG4freq) %>%
+    group_by(nHquantile) %>%
+    mutate(fraction = n/sum(n)) %>%
+    ungroup %>%
+    kable(., "html") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(height="300px", width = "94%")
+
+```
+
+For the cooperatively repressed CE events the fraction of events with
+at least one predicted rG4 overlapping the cassette/alternative exon
+increases with the degree of cooperativity suggesting a potential
+link between cooperativity and rG4 formation.
+
+# Session Information
+
+```{r}
+sessionInfo()
+```

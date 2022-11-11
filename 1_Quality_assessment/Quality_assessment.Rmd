@@ -1,0 +1,430 @@
+---
+title: "Quality assessment of the HNRNPH1 titration RNA-seq data"
+author:
+- name: Mario Keller
+  affiliation: Faculty of Biological Sciences, Goethe University Frankfurt
+output:
+  BiocStyle::html_document:
+      toc: TRUE
+      toc_float: TRUE
+      code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE,
+                      results = TRUE, crop=NULL)
+```
+
+```{r libraries}
+library(tidyverse)
+library(knitr)
+library(ggpubr)
+library(ggsci)
+library(DESeq2)
+library(FactoMineR)
+library(factoextra)
+```
+
+```{r defineTheme}
+myTheme <- theme_bw() +
+    theme(axis.text = element_text(size = 14, colour="black"),
+          axis.title = element_text(size=16, colour="black"),
+          axis.ticks=element_line(color="black"),
+          axis.ticks.length=unit(.15, "cm"),
+          panel.border=element_rect(color="black", fill = NA),
+          panel.background = element_blank(),
+          plot.background = element_blank(),
+          legend.text = element_text(size=12),
+          legend.position = "none")
+```
+
+```{r paths}
+projectDir <- "/Users/mariokeller/projects/HNRNPH_project/Tretow_et_al_2023"
+datarDir <- paste0(projectDir, "/data") 
+```
+
+# Background
+
+As an initial step the quality of the RNA-seq data is verified by
+checking the transcript levels of *HNRNPH1* and *HNRNPH2* as well as of
+the housekeeping genes *ACTB* and *GAPDH* in the knockdown and
+overexpression experiments. 
+
+In addition, PCAs of the knockdown and overexpression experiments are
+performed to obtain an overview about individual replicates.
+
+In a final step, *HNRNPH* transcript and HNRNPH protein levels are 
+correlated to check if both show similar effects in the
+knockdown and overexpression experiments.
+
+# Data
+
+Dr. Anke Busch from the IMB core facility provided DESeq2 runs of
+knockdown and overexpression experiments as RData-Files (one for
+knockdown and one for overexpression). The loaded dds objects are used
+for the generation of vst-transformed counts and extraction of
+normalized counts.
+
+As we encountered problems with the third replicate of the two strongest
+knockdown experiments, these replicates were removed from all analyses.
+
+```{r input}
+
+load(paste0(datarDir, "/DESeq2/DESeq2_knockdown.RData"))
+
+# Rename the dds object
+KD_dds <- dds
+# Extract normalized counts
+KD_counts <- counts(KD_dds, normalized=TRUE)
+# vst-transformation
+KD_vst <- vst(KD_dds, blind=FALSE)
+# Remove unneccessary objects
+rm(conts, dds, gtf, pairwise.dds, res, rld, add_factors)
+
+
+load(paste0(datarDir, "/DESeq2/DESeq2_overexpression.RData"))
+# Rename the dds object
+OE_dds <- dds
+# Extract normalized counts
+OE_counts <- counts(OE_dds, normalized=TRUE)
+# vst-transformation
+OE_vst <- vst(OE_dds, blind=FALSE)
+# Remove unneccessary objects
+rm(conts, dds, gtf, pairwise.dds, res, rld, add_factors)
+```
+
+# Countplots
+
+Countplots for the knockdown and overexpression experiments were
+generated for *HNRNPH1*, *HNRNPH2*, *ACTB* and *GAPDH* using the normalized
+counts.
+
+## Knockdown experiments
+
+```{r}
+
+#Set new column names
+colnames(KD_counts) <- sapply(c("Contr", "00050", "00100", "00250",
+                                "00500", "01000","05000", "10000"),
+                              function(exp){paste0("KD_", exp, "_", 1:3)}) %>%
+    as.character()
+
+# These are the gene identifiers of the genes of interest
+geneIDs <- c(HNRNPH1="ENSG00000169045.17", HNRNPH2="ENSG00000126945.8",
+             ACTB="ENSG00000075624.13", GAPDH="ENSG00000111640.14")
+
+# Extract the normalized counts for the four genes and rename the rows
+counts <- KD_counts[match(geneIDs, rownames(KD_counts)),]
+rownames(counts) <- names(geneIDs)
+
+# Turn the data.frame from a wide into a long format and split the sample info
+#   into condition and replicate (e.g. KD_10000_1 => KD_10000 and 1)
+counts <- counts %>%
+    as.data.frame  %>%
+    tibble::rownames_to_column(var="geneName") %>%
+    mutate(geneName=factor(geneName, levels=c("HNRNPH1", "HNRNPH2",
+                                              "ACTB", "GAPDH"))) %>%
+    pivot_longer(., 2:25, names_to = "sample", values_to="normCounts") %>%
+    mutate(condition=factor(substr(sample, 1, 8),
+                            levels=c("KD_10000", "KD_05000", "KD_01000",
+                                     "KD_00500", "KD_00250", "KD_00100",
+                                     "KD_00050", "KD_Contr"))) %>% 
+    mutate(replicate=substr(sample, 10,10))
+
+
+# Remove the third replicate of the two strongest knockdowns and
+#   create the countplot
+counts %>% dplyr::filter(!sample %in% c("KD_10000_3", "KD_05000_3")) %>%
+ggplot(., aes(x=condition, y=normCounts/1000, shape=replicate)) +
+    geom_point(size=3) +
+    facet_wrap(~geneName, scales = "free_y") +
+    scale_y_continuous(labels = function(x) format(x, big.mark=",",
+                                                   scientific=F))  +
+    labs(y="Normalized counts (x10e3)", x="") +
+    expand_limits(y=0) +
+    myTheme +
+    theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1),
+          legend.position = "right")
+
+
+```
+
+*HNRNPH1* levels shows a strong reduction in the knockdown experiments, while
+there is only a small reduction of *HNRNPH2* levels and no changes for
+*ACTB* and *GAPDH*.
+
+## Overexpression experiments
+
+```{r}
+
+#Set new column names
+colnames(OE_counts) <- sapply(1:3, function(rep){paste0("OE_",
+                                                        c("Contr", "00600",
+                                                          "01000", "02500"),
+                                                        "_", rep)}) %>%
+    as.character()
+
+# Extract the normalized counts for the four genes and rename the rows
+counts <- OE_counts[match(geneIDs, rownames(OE_counts)),]
+rownames(counts) <- names(geneIDs)
+
+counts <- counts %>%
+    as.data.frame  %>%
+    tibble::rownames_to_column(var="geneName") %>%
+    mutate(geneName=factor(geneName, levels=c("HNRNPH1", "HNRNPH2",
+                                              "ACTB", "GAPDH"))) %>%
+    pivot_longer(., 2:13, names_to = "sample", values_to="normCounts") %>%
+    mutate(condition=factor(substr(sample, 1, 8),
+                            levels=c("OE_Contr", "OE_00600","OE_01000",
+                                     "OE_02500", "KD_02500"))) %>% 
+    mutate(replicate=substr(sample, 10,10))
+
+counts %>%
+ggplot(., aes(x=condition, y=normCounts/1000, shape=replicate)) +
+    geom_point(size=3) +
+    facet_wrap(~geneName, scales = "free_y") +
+    scale_y_continuous(labels = function(x) format(x, big.mark=",",
+                                                   scientific=F)) +
+    labs(y="Normalized counts (x10e3)") +
+    expand_limits(y=0) +
+    myTheme +
+    theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1),
+          legend.position = "right")
+```
+
+*HNRNPH1* levels shows a strong increase in the overexpression experiments,
+while *HNRNPH2*, *ACTB* and *GAPDH* levels are not affected.
+
+# Priciple Component Analysis
+
+For the principal component analyses we use the vst-transformed counts
+of the 5.000 genes with the highest variance. For the knockdown and
+overexpression experiments two separate PCAs are performed.
+
+```{r}
+nGenes <- 5000
+```
+
+## Knockdown experiments
+
+```{r}
+
+# Set new column names
+colnames(KD_vst) <- sapply(c("Contr", "00050", "00100", "00250",
+                                "00500", "01000","05000", "10000"),
+                              function(exp){paste0("KD_", exp, "_", 1:3)}) %>%
+    as.character()
+
+# Extract the vst-transformed counts (except the two third replicates)
+KD_matrix <- assay(KD_vst[,-c(21,24)])
+
+# Determine order by decreasing variance
+rowOrder <- rowVars(KD_matrix) %>% order(decreasing = T)
+
+# Re-order the matrix
+KD_matrix <- KD_matrix[rowOrder,]
+
+# Perform PCA and extract required information
+PCAres <- PCA(KD_matrix[1:nGenes,] %>% as.matrix %>% t,  graph = F,
+              scale.unit = FALSE)
+PCAind <- get_pca_ind(PCAres)
+PCAeig <- get_eig(PCAres) %>% round(.,1)
+
+# Generate the data.frame for the PCA plot
+PCAdf <- data.frame(PC1=PCAind$coord[,1],
+                    PC2=PCAind$coord[,2],
+                    PC3=PCAind$coord[,3], 
+                    condition=factor(rownames(PCAind$coord) %>% substr(., 1, 8),
+                                     levels=c("KD_10000", "KD_05000", "KD_01000",
+                                     "KD_00500", "KD_00250", "KD_00100",
+                                     "KD_00050", "KD_Contr") %>% rev),
+                    replicate=factor(rownames(PCAind$coord) %>% substr(., 10, 10),
+                                     levels=c(1,2,3)))
+
+# Determine the limits for the plot's x-axis
+xylim <- c(
+  min(c(PCAdf$PC1, PCAdf$PC2)),
+  max(c(PCAdf$PC1, PCAdf$PC2))
+)
+
+colNamesKD <- c(KD_10000="10 nM", KD_05000="5 nM", KD_01000="1 nM",
+                KD_00500="0.5 nM", KD_00250="0.25 nM", KD_00100="0.1 nM",
+                KD_00050="0.05 nM", KD_Contr="0 nM")
+
+ggplot(PCAdf, aes(x=PC1, y=PC2, fill=condition, shape=replicate)) +
+    geom_point(size=7) +
+    ggsci::scale_fill_npg(labels=colNamesKD) +
+    coord_cartesian(xlim=xylim, ylim=xylim) +  
+    scale_shape_manual(values=c("1" = 21, "2"=24, "3"=22)) +
+    scale_x_continuous(n.breaks = 6) +
+    scale_y_continuous(n.breaks = 6) +
+    labs(x=paste0("PC1 (", PCAeig[1,2], "%)"),
+         y=paste0("PC2 (", PCAeig[2,2], "%)")) +
+    myTheme +
+    theme(legend.position = "right") +
+    guides(fill = guide_legend(override.aes=list(shape=21)))
+```
+
+PC1 shows a clear separation of the two strongest knockdowns (5 and 10 nM)
+and to some extent also for the third strongest knockdown (1 nM).
+
+## Overexpression experiments
+
+```{r}
+#Set new column names
+colnames(OE_vst) <- sapply(1:3, function(rep){paste0("OE_",
+                                                     c("Contr", "00600",
+                                                       "01000", "02500"),
+                                                     "_", rep)}) %>%
+    as.character()
+
+
+# Extract the vst-transformed counts
+OE_matrix <- assay(OE_vst)
+
+# Determine order by decreasing variance
+rowOrder <- rowVars(OE_matrix) %>% order(decreasing = T)
+
+# Re-order the matrix
+OE_matrix <- OE_matrix[rowOrder,]
+
+# Perform PCA and extract required information
+PCAres <- PCA(OE_matrix[1:nGenes,] %>% as.matrix %>% t,  graph = F,
+              scale.unit = FALSE)
+PCAind <- get_pca_ind(PCAres)
+PCAeig <- get_eig(PCAres) %>% round(.,1)
+
+# Generate the data.frame for the PCA plot
+PCAdf <- data.frame(PC1=PCAind$coord[,1], PC2=PCAind$coord[,2],
+                    condition=factor(rownames(PCAind$coord) %>% substr(., 1, 8),
+                                     levels=c("OE_Contr", "OE_00600","OE_01000",
+                                     "OE_02500", "KD_02500")),
+                    replicate=factor(rownames(PCAind$coord) %>% substr(., 10, 10),
+                                     levels=c(1,2,3)))
+
+# Determine the limits for the plot's x-axis
+xylim <- c(
+  min(c(PCAdf$PC1, PCAdf$PC2)),
+  max(c(PCAdf$PC1, PCAdf$PC2))
+)
+
+colNamesOE <- c(OE_Contr=expression(0~mu*g), OE_00600=expression(0.6~mu*g),
+                OE_01000=expression(1~mu*g), OE_02500=expression(2.5~mu*g))
+
+ggplot(PCAdf, aes(x=PC1, y=PC2, fill=condition, shape=replicate)) +
+    geom_point(size=7) +
+    ggsci::scale_fill_npg(labels=colNamesOE) +
+    coord_cartesian(xlim=xylim, ylim=xylim) +  
+    scale_shape_manual(values=c("1" = 21, "2"=24, "3"=22)) +
+    scale_x_continuous(n.breaks = 6) +
+    scale_y_continuous(n.breaks = 6) +
+    labs(x=paste0("PC1 (", PCAeig[1,2], "%)"),
+         y=paste0("PC2 (", PCAeig[2,2], "%)")) +
+    myTheme +
+    theme(legend.position = "right") +
+    guides(fill = guide_legend(override.aes=list(shape=21)))
+```
+
+There is not a clear separation visible. The combination of PC1 and
+PC2 separates the strongest overexpression (2.5 ug) from the other
+samples.
+
+# Correlation of HNRNPH transcript and protein levels
+
+*HNRNPH1* transcript and HNRNPH protein levels are correlated based on the
+averaged vst-transformed counts and the relative protein concentration
+determined by Western blot (relative to the matched Control). For the
+knockdown and overexpression experiments two separate correlations were
+performed.
+
+## Knockdown experiments
+
+```{r}
+
+# Average the relative protein concentrations of replicates and set Control
+#   to 100%
+proteinConc <- c(KD_10000=mean(c(54,39)), KD_05000=mean(c(51,47)),
+                   KD_01000=mean(c(54,49,76)), KD_00500=mean(c(80,68,98)),
+                   KD_00250=mean(c(84,80,91)), KD_00100=mean(c(102,98,81)),
+                   KD_00050=mean(c(95,114,81)), KD_Contr=100)
+
+# Extract the vst-transformed counts of HNRNPH1 and prepare a long data.frame
+#   with replicate average vst-transformed counts
+vsts <- KD_vst[rownames(KD_vst) == "ENSG00000169045.17",] %>%
+    assay %>%
+    as.data.frame %>%
+    dplyr::select(-c(21,24)) %>% # Removal of the two third replicates
+    pivot_longer(., everything(), names_to="condition", values_to="vst") %>%
+    mutate(condition=factor(substr(condition, 1, 8),
+                            levels=c("KD_10000", "KD_05000", "KD_01000",
+                                     "KD_00500", "KD_00250", "KD_00100",
+                                     "KD_00050", "KD_Contr"))) %>% 
+    arrange(condition) %>%
+    group_by(condition) %>%
+    dplyr::summarise(vst = mean(vst)) 
+
+# Combine the protein concentrations and vst-transformed counts into a single
+#   data.frame
+CorrDf <- data.frame(proteinConc = proteinConc, vst = vsts %>% pull(vst))
+
+# Create scatter plot with a regression line and add correlation statistics
+ggplot(CorrDf, aes(x=proteinConc, y=vst)) +
+    geom_point(size=4) +
+    geom_smooth(method = lm) +
+    coord_cartesian(ylim=c(13.5,15), xlim=c(47, 100)) +
+    stat_cor() +
+    labs(x="Protein concentration (%)", y="Transcript level (vst)") +
+    myTheme
+
+```
+
+The correlation between the relative protein concentration and the
+transcript level is very strong (R = 0.96 and p = 0.00014).
+
+## Overexpression experiments
+
+```{r}
+
+# Average the relative protein concentrations of replicates and set Control
+#   to 100%
+proteinConc<- c(OE_Contr=100, OE_00600=122.060213917261,
+                OE_01000=143.3403293, OE_02500=176.4433966)
+
+# Extract the vst-transformed counts of HNRNPH1 and prepare a long data.frame
+#   with replicate average vst-transformed counts
+vsts <- OE_vst[rownames(KD_vst) == "ENSG00000169045.17",] %>%
+    assay %>%
+    as.data.frame %>%
+    pivot_longer(., everything(), names_to="cond", values_to="vst") %>%
+    mutate(cond=factor(substr(cond, 1, 8), levels=c("OE_Contr", "OE_00600",
+                                                    "OE_01000", "OE_02500"))) %>% 
+    arrange(cond) %>%
+    group_by(cond) %>%
+    dplyr::summarise(vst = mean(vst)) 
+
+# Combine the protein concentrations and vst-transformed counts into a single
+#   data.frame
+CorrDf <- data.frame(proteinConc = proteinConc, vst = vsts %>% pull(vst))
+
+# Create a scatter plot with a regression line and add correlation statistics
+ggplot(CorrDf, aes(x=proteinConc, y=vst)) +
+    geom_point(size=4) +
+    geom_smooth(method = lm) +
+    coord_cartesian(ylim=c(14.3, 18.7), xlim=c(100,179)) +
+    scale_y_continuous(labels = function(x) paste0(x, ".0"))  +
+    stat_cor() +
+    labs(x="Protein concentration (%)", y="Transcript level (vst)") +
+    myTheme
+```
+
+The correlation between the relative protein concentration and the
+transcript level is very strong (R = 0.99 and p = 0.014).
+
+# Session Information
+
+```{r}
+sessionInfo()
+```

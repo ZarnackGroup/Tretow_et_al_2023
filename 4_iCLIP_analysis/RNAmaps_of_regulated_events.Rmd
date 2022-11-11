@@ -1,0 +1,888 @@
+---
+title: "RNAmaps of HNRNPH binding on cooperatively regulated CE events"
+author:
+- name: Mario Keller
+  affiliation: Faculty of Biological Sciences, Goethe University Frankfurt
+output:
+  BiocStyle::html_document:
+      toc: TRUE
+      toc_float: TRUE
+      code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE,
+                      results = TRUE, crop=NULL)
+```
+
+```{r libraries}
+library(tidyverse)
+library(knitr)
+library(ggpubr)
+library(ggbeeswarm) 
+library(GenomicRanges)
+```
+
+```{r defineTheme}
+myTheme <- theme_bw() +
+    theme(axis.text = element_text(size = 14, colour="black"),
+          axis.title = element_text(size=16, colour="black"),
+          axis.ticks=element_line(color="black"),
+          axis.ticks.length=unit(.15, "cm"),
+          panel.border=element_rect(color="black", fill = NA),
+          panel.background = element_blank(),
+          plot.background = element_blank(),
+          legend.text = element_text(size=12),
+          legend.position = "none")
+```
+
+```{r paths}
+projectDir <- "/Users/mariokeller/projects/HNRNPH_project/Tretow_et_al_2023"
+
+iClipDir <- paste0(projectDir, "/4_iCLIP_analysis")
+majiqDir <- paste0(projectDir,"/2_MAJIQ_AS_analysis")
+```
+
+# Background
+
+To obtain deeper insights into the binding behavior of HNRNPH, RNAmaps
+are a valuable tool. By opening windows at fixed positions in the CE
+events (the four involved splice sites), the iCLIP signal of CE events
+can be combined to produce a single signal that shows the binding
+prefernece of HNRNPH in the defined windows. The addition of signal from
+non-regulated CE events can be added to identify regions with enriched
+HNRNPH binding.
+
+# Data
+
+Regulated and non-regulated minigenes are loaded from RDS-Files created
+with *Create_CE_minigenes.R*.
+
+Regulated and non-regulated CE events are loaded from RDS-Files created
+with *MAJIQ_AS_analysis.Rmd*.
+
+Crosslink sites (the raw iCLIP signal) is loaded from a RDS-File created
+with *Binding_site_definition.R*.
+
+```{r}
+regulatedMiniGenes <- readRDS(paste0(iClipDir,
+                                     "/rds_files/regulatedMiniGenes.rds"))
+nonRegulatedMiniGenes <- readRDS(paste0(iClipDir,
+                                        "/rds_files/nonregulatedMiniGenes.rds"))
+
+regulatedCEs <- readRDS(paste0(majiqDir,"/rds_files/regulatedCEs.rds"))
+nonRegulatedCEs <- readRDS(paste0(majiqDir,"/rds_files/nonregulatedCEs.rds"))
+
+crosslinkSites <- readRDS(paste0(iClipDir,"/rds_files/HNRNPH_crosslink_sites.rds"))
+```
+
+As a first step, CE events that do not belong to the "Coop-Enh" or
+"Coop-Rep" category are removed.
+
+```{r}
+keep <- regulatedMiniGenes %>%
+    sapply(., function(gr){gr$hillCat[1]}) %in% c("Coop-Enh", "Coop-Rep")
+regulatedMiniGenes <- regulatedMiniGenes[keep]
+rm(keep)
+```
+
+Here is the total number of events per hill category:
+
+-   Coop-Enh:
+    `r regulatedMiniGenes %>% sapply(., function(gr){gr$hillCat[1]}) %>% table %>% .[1]`
+-   Coop-Rep:
+    `r regulatedMiniGenes %>% sapply(., function(gr){gr$hillCat[1]}) %>% table %>% .[2]`
+-   non: `r length(nonRegulatedMiniGenes)`
+
+# Length distribution of exons
+
+Before doing the preparation of the RNAmaps, the length distribution of
+the three exons involved in the CE events was compared between the
+Coop-Enh and Coop-Rep category.
+
+```{r}
+
+# Extract for each of the 301 CE events the width of the upstream (C1),
+#   alternative (A) and downstream exon (C2)
+widthColumn <- c(sapply(regulatedMiniGenes,
+                        function(gr){width(gr[gr$exon=="C1"])}),
+                 sapply(regulatedMiniGenes,
+                        function(gr){width(gr[gr$exon=="A"])}),
+                 sapply(regulatedMiniGenes,
+                        function(gr){width(gr[gr$exon=="C2"])}))
+
+# Define the exon (C1, A or C2) 
+exonColumn <- factor(c(rep("C1", length(regulatedMiniGenes)),
+                       rep("A", length(regulatedMiniGenes)),
+                       rep("C2", length(regulatedMiniGenes))),
+                     levels=c("C1", "A", "C2"))
+
+# Define the hill category for each exon
+hillColumn <- factor(rep(regulatedMiniGenes %>%
+                             sapply(., function(gr){gr$hillCat[1]}),
+                         3),
+                     levels = c("Coop-Enh", "Coop-Rep"))
+
+data.frame(width=widthColumn,
+           exon=exonColumn,
+           hillCat=hillColumn) %>%
+    ggplot(., aes(x=hillCat, y=log10(width), group=hillCat, fill=hillCat, col=hillCat)) +
+    geom_quasirandom() +
+    geom_boxplot(alpha=.5, outlier.size = -1, col="black") +
+    scale_fill_manual(values=c("Coop-Rep" = "salmon2", "Coop-Enh"="cornflowerblue")) +
+    scale_color_manual(values=c("Coop-Rep" = "salmon2", "Coop-Enh"="cornflowerblue")) +
+    stat_compare_means(method="wilcox.test") +
+    labs(x="exon", y="Exon length (log10)") +
+    facet_wrap(~exon, ncol=4) +
+    myTheme +
+    theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))
+    
+rm(widthColumn, exonColumn, hillColumn)
+```
+
+The flanking exons (C1 and C2) show no length differences between 
+the cooperatively enhanced and repressed Ce event In contrast, the
+cassette/alternative exon (A) itself tends to be longer if the
+exon is repressed by HNRNPH.
+
+# RNAmaps
+
+## PSI distribution in control samples
+
+As the enhanced and repressed CE events have different inclusion levels
+in the control conditions, their RNAmaps should not be directly
+compared. It is better to sample sets of non-regulated CE events that
+roughly mirror the control PSI distribution of the enhanced and
+repressed CE events.
+
+To demonstrate the differences in the PSI distributions, I extract the
+knockdown and overexpression PSI estimates for the cooperatively
+enhanced, repressed and non-regulated CE events, average them and plot
+the distributions.
+
+```{r}
+
+# Filter the regulated CEs for the ones with minigenes and calculate
+#   the average control PSI
+regulatedCEs <- regulatedCEs %>%
+    dplyr::filter(event_id %in% names(regulatedMiniGenes)) %>%
+    dplyr::select(event_id, KD_Contr_median_psi, OE_Contr_median_psi) %>%
+    mutate(Contr_PSI = rowMeans(dplyr::select(.,ends_with("Contr_median_psi"))))
+
+nonRegulatedCEs <- nonRegulatedCEs %>%
+    dplyr::filter(event_id %in% names(nonRegulatedMiniGenes)) %>%
+    dplyr::select(event_id, KD_Contr_median_psi, OE_Contr_median_psi) %>%
+    mutate(Contr_PSI = rowMeans(dplyr::select(.,ends_with("Contr_median_psi"))))
+
+# Arrange according to the order of the minigenes
+regulatedCEs <- regulatedCEs[match(names(regulatedMiniGenes),
+                                   regulatedCEs$event_id),]
+
+nonRegulatedCEs <- nonRegulatedCEs[match(names(nonRegulatedMiniGenes),
+                                   nonRegulatedCEs$event_id),]
+
+# Add the Hill category information
+regulatedCEs$hillCat <- factor(regulatedMiniGenes %>%
+    sapply(.,function(gr){gr$hillCat[1]}), levels = c("Coop-Enh", "Coop-Rep",
+                                                      "nonReg"))
+
+nonRegulatedCEs$hillCat <- factor("nonReg", levels = c("Coop-Enh", "Coop-Rep",
+                                                      "nonReg"))
+
+rbind(regulatedCEs, nonRegulatedCEs) %>%
+    ggplot(., aes(x=hillCat, y=Contr_PSI)) +
+    geom_quasirandom(size=1, col="#666666") +
+    geom_boxplot(alpha=.5, outlier.size = -1, col="black") +
+    labs(x="Hill category", y="Average control PSI") +
+    myTheme +
+    theme(axis.text.x = element_text(angle=45, vjust=1, hjust=1))
+```
+
+One can nicely see the differences in the PSI distributions for the
+three categories.
+
+For the RNAmaps two sets of PSI-matched non-regulated CE events need to
+be determined. One for the cooperatively enhanced CE events and one for
+the cooperatively repressed CE events. Both sets should have the same
+set size as the enhanced and repressed CE events.
+
+A similar approach can be seen in Figure S3 of [Alvelos et
+al.](https://www.life-science-alliance.org/content/4/3/e202000825). In
+brief, PSI intervals are determined based on the user-defined quantiles
+that are computed for the PSI values of the enhanced and repressed
+exons. Next, the non-regulated CE events are assigned to the intervals
+based on their PSI values. As a final step, equally sized sets of
+non-regulated CE events are sampled from the intervals. Set sizes are
+defined in away that the total number of sampled events matches the
+number of enhanced and repressed CE events, respectively.
+
+In Alvelos et al. quantiles from 0 to 1 with a step-size of 0.05 were
+used. However, this procedure did not work for this data as there is a
+lack of non-regulated CE events with control PSIs in a range of 0.25 to
+0.75. Therefore, quantiles were determined in a try and error approach
+until the results looked halfway satisfactory.
+
+```{r}
+# Extract the control PSIs
+CoopEnhPSIs <- regulatedCEs %>%
+    dplyr::filter(hillCat == "Coop-Enh") %>%
+    pull(Contr_PSI)
+CoopRepPSIs <- regulatedCEs %>%
+    dplyr::filter(hillCat == "Coop-Rep") %>%
+    pull(Contr_PSI)
+
+# The arrange() is necessary as I improved the code and results would otherwise
+#   be not identical to the ones in the publication
+nonRegulatedCEs <- nonRegulatedCEs %>% arrange(event_id)
+
+# define the quantiles
+qCoopEnh <- quantile(CoopEnhPSIs, c(0, 0.05, 0.7, 0.8, 1))
+qCoopRep <- quantile(CoopRepPSIs, c(0, 0.1, 0.65, 0.9, 1))
+
+nonRegulatedCEs$intCoopEnh = findInterval(nonRegulatedCEs$Contr_PSI, qCoopEnh)
+nonRegulatedCEs$intCoopRep = findInterval(nonRegulatedCEs$Contr_PSI, qCoopRep)
+
+set.seed(123)
+
+matchedNonRegulatedCEs_Rep <- nonRegulatedCEs %>%
+    dplyr::filter(intCoopRep %in% 1:(length(qCoopRep) -1)) %>%
+    split(., .$intCoopRep) %>%
+    lapply(function(df){
+        rows <- sample(1:nrow(df),
+                       size=floor(length(CoopRepPSIs)/(length(qCoopRep)-1)),
+                       replace=FALSE)
+        return(df[rows,])
+    }) %>% bind_rows
+
+matchedNonRegulatedCEs_Enh <- nonRegulatedCEs %>%
+    dplyr::filter(intCoopEnh %in% 1:(length(qCoopEnh) -1)) %>%
+    split(., .$intCoopEnh) %>%
+    lapply(function(df){
+        rows <- sample(1:nrow(df),
+                       size=floor(length(CoopEnhPSIs)/(length(qCoopEnh)-1)),
+                       replace=FALSE)
+        return(df[rows,])
+    }) %>% bind_rows
+
+data.frame(
+    hillCat = factor(c(rep("CoopEnh", length(CoopEnhPSIs)),
+                       rep("matched_CoopEnh", nrow(matchedNonRegulatedCEs_Enh)),
+                       rep("CoopRep", length(CoopRepPSIs)),
+                       rep("matched_CoopRep", nrow(matchedNonRegulatedCEs_Rep))),
+                     levels = c("CoopEnh", "matched_CoopEnh",
+                                "CoopRep", "matched_CoopRep")),
+    Contr_PSI = c(CoopEnhPSIs, matchedNonRegulatedCEs_Enh$Contr_PSI,
+                  CoopRepPSIs, matchedNonRegulatedCEs_Rep$Contr_PSI)
+) %>%
+    ggplot(., aes(x=hillCat, y=Contr_PSI)) +
+        geom_quasirandom() +
+        geom_boxplot(alpha=.5, outlier.size = -1, col="black") +
+        stat_summary(fun.y="mean", geom="point", col="red")+
+        labs(x="Hill category", y="Average control PSI") +
+        myTheme +
+        theme(axis.text.x = element_text(angle=45, vjust=1, hjust=1))
+
+```
+
+The matched distributions are not perfect but median and mean (red
+point) are especially for the repressed CE events very similar.
+
+## Measuring iCLIP signal around splice sites
+
+For the RNAmaps the iCLIP signal around the upstream 5' splice site, the
+upstream 3' splice, the downstream 5' splice site and the downstream 3'
+splice sites is used.
+
+Around each of the four splice sites a window is opened, which ranges up
+to 50 nts into exons and up to 300 nts into introns. If exons or introns
+are shorter than 50 nts and 300 nts, respectively, the missing
+nucleotides are internally replaced by NAs.
+
+The procedure above was done for each individual CE event. Signals in
+the four windows were ultimately combined by the Hill category into
+matrices, where rows are individual CE events and columns the 351 nt
+wide windows around the splice sites.
+
+```{r}
+
+# This function creates for each Hill category and each splice site
+#   the matrices.
+#   The upstream 5' splice site is the 3' end of the C1 exon
+#   The upstream 3' splice site is the 5' end of the A exon
+#   The downstream 5' splice site is the 3' end of the A exon
+#   The downstream 3' splice site is the 5' end of the C2 exon
+createMatrix <- function(miniGenes, exon, exonEnd){
+    # Iterate over each minigene provided
+    lapply(miniGenes, function(gr){
+        
+        # Define the first and second exon
+        if(exon=="C1"){
+            exon2 <- "A"
+        } else if(exon=="A" & exonEnd=="5prime"){
+            exon2 <- "C1"
+        } else if(exon=="A" & exonEnd=="3prime"){
+            exon2 <- "C2"
+        } else {
+            exon2 <- "A"
+        }
+        
+        # Subset the GRanges object to the two determined exons
+        gr <- gr[gr$exon %in% c(exon, exon2)]
+        
+        # Get the width of the involved intron
+        intronWidth <- width(gaps(gr, start=NA, end=NA))
+        
+        # Subset the GRanges object further to the exon the splice site is
+        #   located on
+        gr <- gr[gr$exon==exon]
+        
+        # Get the width of the involved exon
+        exonWidth <- width(gr)
+        
+        # Reduce the GRanges object to a single nt (this is the splice site)
+        gr <- resize(gr[gr$exon==exon], 1,
+                     fix= ifelse(exonEnd == "5prime", "start" , "end"))
+        
+        # Using promoters() the up to 351 nt range is created.
+        if(exonEnd == "5prime"){
+            upstream <- min(c(300, intronWidth))
+            downstream <- min(c(50, exonWidth))
+            gr <- promoters(gr, upstream = upstream, downstream=downstream+1)
+        } else {
+            upstream <- min(c(50, exonWidth))
+            downstream <- min(c(300, intronWidth))
+            gr <- promoters(gr, upstream = upstream, downstream=downstream+1)
+        }
+        
+        # Get the strand
+        strand <- strand(gr) %>% as.character
+        
+        # The iCLIP signal in the window is extracted by subsetting the RleList
+        if(strand == "+"){
+            signalInWindow <-  crosslinkSites$`+`[gr][[1]] %>% as.numeric
+        } else {
+            signalInWindow <- crosslinkSites$`-`[gr][[1]] %>% as.numeric %>% rev
+            }
+        
+        # If the exon is short than 50 nt or the intron shorter than 300 nt
+        #   NAs need to be added to the numeric vector.
+        if(exon=="C1"){
+            leftNAs <- ifelse(exonWidth < 50, 50-exonWidth, 0)
+            rightNAs <- ifelse(intronWidth < 300, 300-intronWidth, 0)
+        } else if(exon=="A" & exonEnd=="5prime"){
+            leftNAs <- ifelse(intronWidth < 300, 300-intronWidth, 0)
+            rightNAs <- ifelse(exonWidth < 50, 50-exonWidth, 0)
+        } else if(exon=="A" & exonEnd=="3prime"){
+            leftNAs <- ifelse(exonWidth < 50, 50-exonWidth, 0)
+            rightNAs <- ifelse(intronWidth < 300, 300-intronWidth, 0)
+        } else {
+            leftNAs <- ifelse(intronWidth < 300, 300-intronWidth, 0)
+            rightNAs <- ifelse(exonWidth < 50, 50-exonWidth, 0)
+        }
+        signalInWindow <- c(rep(NA, leftNAs), signalInWindow, rep(NA, rightNAs))
+        
+        return(signalInWindow)
+        
+        }) %>% as.data.frame %>% as.matrix %>% t
+}
+
+
+
+# Prepare the four matrices for the regulated CE events
+C1_3prime_mat <- createMatrix(regulatedMiniGenes,
+                              exon="C1",
+                              exonEnd="3prime")
+A_5prime_mat <- createMatrix(regulatedMiniGenes,
+                             exon="A",
+                             exonEnd="5prime")
+A_3prime_mat <- createMatrix(regulatedMiniGenes,
+                             exon="A",
+                             exonEnd="3prime")
+C2_5prime_mat <- createMatrix(regulatedMiniGenes,
+                              exon="C2",
+                              exonEnd="5prime")
+
+# The Hill category is added as rowname. This allows the splitting into
+#   cooperatively enhanced and repressed exons
+rownames(C1_3prime_mat) <- regulatedMiniGenes %>%
+    sapply(., function(gr){gr$hillCat %>% unique})
+rownames(A_5prime_mat) <- regulatedMiniGenes %>%
+    sapply(., function(gr){gr$hillCat %>% unique})
+rownames(A_3prime_mat) <- regulatedMiniGenes %>%
+    sapply(., function(gr){gr$hillCat %>% unique})
+rownames(C2_5prime_mat) <- regulatedMiniGenes %>%
+    sapply(., function(gr){gr$hillCat %>% unique})
+
+# Prepare the four matrices for the non-regulated CE events
+
+# Subset the non-regulated minigenes to those matched by PSI
+matchedNonRegulatedMiniGenes_Enh <- nonRegulatedMiniGenes[
+    names(nonRegulatedMiniGenes) %in% matchedNonRegulatedCEs_Enh$event_id]
+matchedNonRegulatedMiniGenes_Rep <- nonRegulatedMiniGenes[
+    names(nonRegulatedMiniGenes) %in% matchedNonRegulatedCEs_Rep$event_id]
+
+matchedCoopRepC1_3prime_mat <- createMatrix(matchedNonRegulatedMiniGenes_Rep,
+                                            exon="C1",
+                                            exonEnd="3prime")
+matchedCoopRepA_5prime_mat <- createMatrix(matchedNonRegulatedMiniGenes_Rep,
+                                           exon="A",
+                                           exonEnd="5prime")
+matchedCoopRepA_3prime_mat <- createMatrix(matchedNonRegulatedMiniGenes_Rep,
+                                           exon="A",
+                                           exonEnd="3prime")
+matchedCoopRepC2_5prime_mat <- createMatrix(matchedNonRegulatedMiniGenes_Rep,
+                                            exon="C2",
+                                            exonEnd="5prime")
+
+matchedCoopEnhC1_3prime_mat <- createMatrix(matchedNonRegulatedMiniGenes_Enh,
+                                            exon="C1",
+                                            exonEnd="3prime")
+matchedCoopEnhA_5prime_mat <- createMatrix(matchedNonRegulatedMiniGenes_Enh,
+                                           exon="A",
+                                           exonEnd="5prime")
+matchedCoopEnhA_3prime_mat <- createMatrix(matchedNonRegulatedMiniGenes_Enh,
+                                           exon="A",
+                                           exonEnd="3prime")
+matchedCoopEnhC2_5prime_mat <- createMatrix(matchedNonRegulatedMiniGenes_Enh,
+                                            exon="C2",
+                                            exonEnd="5prime")
+```
+
+As a small number of windows with very strong signals might dominate the
+RNAmaps, a row-wise min-max normalization ((x-min) / (max-min)) was
+performed.
+
+```{r}
+
+# Signals are min-max nomalized by row. NaNs are replaced by 0 afterwards
+minMaxNorm <- function(mat){
+    mat <- apply(mat, 1, function(row){
+        (row-min(row, na.rm=TRUE))/ (max(row, na.rm=TRUE)-min(row, na.rm=TRUE))
+        }) %>% t
+    mat[is.nan(mat)] <- 0
+    return(mat)
+}
+
+# Regulated
+C1_3prime_mat <- minMaxNorm(C1_3prime_mat)
+A_5prime_mat <- minMaxNorm(A_5prime_mat)
+A_3prime_mat <- minMaxNorm(A_3prime_mat)
+C2_5prime_mat <- minMaxNorm(C2_5prime_mat)
+
+# Non-regulated
+matchedCoopEnhC1_3prime_mat <- minMaxNorm(matchedCoopEnhC1_3prime_mat)
+matchedCoopEnhA_5prime_mat <- minMaxNorm(matchedCoopEnhA_5prime_mat)
+matchedCoopEnhA_3prime_mat <- minMaxNorm(matchedCoopEnhA_3prime_mat)
+matchedCoopEnhC2_5prime_mat <- minMaxNorm(matchedCoopEnhC2_5prime_mat)
+
+matchedCoopRepC1_3prime_mat <- minMaxNorm(matchedCoopRepC1_3prime_mat)
+matchedCoopRepA_5prime_mat <- minMaxNorm(matchedCoopRepA_5prime_mat)
+matchedCoopRepA_3prime_mat <- minMaxNorm(matchedCoopRepA_3prime_mat)
+matchedCoopRepC2_5prime_mat <- minMaxNorm(matchedCoopRepC2_5prime_mat)
+
+
+```
+
+## RNAmap creation
+
+RNAmaps are created for enhanced and reprssed CE events separately. In
+each RNAmap also the signal of the matched non-regulated CE Events is
+shown. The signal is the averaged min-max normalized iCLIP signal of the
+CE events at a specific nucleotide. Signal is also shown with
+loess-smoothing to get clearer signals.
+
+In each of the two RNAmaps the signals of enhanced and repressed CE
+events can be compared against the signal of the matched non-regulated
+CE events. To easily identify regions with strong signal differences, 10
+nt bins with a step size of 1 are created. For each of the 342
+(351-10+1) bins the signal on the 10 nts is averaged for each CE event,
+and the average signals per bin compared between the enhanced /
+repressed groups and their matched non-regulated counterparts using
+wilcox.test, followed by FDR correction across all 342 tested bins.
+
+In the first step, the data.frames with the raw signals around each of
+the four splice sites are prepared for the enhanced and repressed CE
+events and their matched non-regulated CE events.
+
+```{r}
+
+# This function creates the data.frames with the raw signals
+createRNAmapDf  <- function(hillCat){
+    
+    positionColumn <- rep(1:351, 4)
+    spliceSiteColumn <- factor(c(rep("C1_3prime", 351),
+                                 rep("A_5prime", 351),
+                                 rep("A_3prime", 351),
+                                 rep("C2_5prime", 351)),
+                               levels=c("C1_3prime", "A_5prime",
+                                        "A_3prime", "C2_5prime"))
+    
+    # Create the data.frame with the raw signal for the Cooperative set
+    signalColumn <- c(
+        colMeans(C1_3prime_mat[rownames(C1_3prime_mat) == hillCat,], na.rm=TRUE),
+        colMeans(A_5prime_mat[rownames(A_5prime_mat) == hillCat,], na.rm=TRUE),
+        colMeans(A_3prime_mat[rownames(A_3prime_mat) == hillCat,], na.rm=TRUE),
+        colMeans(C2_5prime_mat[rownames(C2_5prime_mat) == hillCat,], na.rm=TRUE))
+    
+    
+    RNAmapDf_Coop <- data.frame(pos = positionColumn,
+                                spliceSite= spliceSiteColumn,
+                                signal= signalColumn,
+                                set=hillCat)
+    
+    # Create the data.frame with the raw signal for the matched set
+    if(hillCat == "Coop-Enh"){
+        signalColumn <- c(
+            colMeans(matchedCoopEnhC1_3prime_mat, na.rm=TRUE),
+            colMeans(matchedCoopEnhA_5prime_mat, na.rm=TRUE),
+            colMeans(matchedCoopEnhA_3prime_mat, na.rm=TRUE),
+            colMeans(matchedCoopEnhC2_5prime_mat, na.rm=TRUE))
+    } else {
+        signalColumn <- c(
+            colMeans(matchedCoopRepC1_3prime_mat, na.rm=TRUE),
+            colMeans(matchedCoopRepA_5prime_mat, na.rm=TRUE),
+            colMeans(matchedCoopRepA_3prime_mat, na.rm=TRUE),
+            colMeans(matchedCoopRepC2_5prime_mat, na.rm=TRUE))
+    }
+    
+    RNAmapDf_matched <- data.frame(pos = positionColumn,
+                                spliceSite= spliceSiteColumn,
+                                signal= signalColumn,
+                                set="matched")
+    
+    return(list(RNAmapDf_Coop, RNAmapDf_matched))
+}
+
+
+tmp <- createRNAmapDf(hillCat = "Coop-Enh")
+RNAmapDf_Enh <- tmp[[1]]
+RNAmapDf_Enh_matched <- tmp[[2]]
+
+tmp <- createRNAmapDf(hillCat = "Coop-Rep")
+RNAmapDf_Rep <- tmp[[1]]
+RNAmapDf_Rep_matched <- tmp[[2]]
+rm(tmp)
+```
+
+In the next step, the 342 bins are created and test for signal
+differences between the regulated CE events and the matched
+non-regulated CE events.
+
+```{r}
+
+# This functions identifies bins with significant signal differences
+#   in the windows around each of the four splice sites
+determineSignificantBins <- function(hillCat){
+    
+    binSize <- 10
+    
+    # Determine significant bins for each of the four splice sites
+    
+    # C1_3prime
+    # Raw iCLIP signal is extracted for the cooperatively regulated CE events
+    #   and the matched non-regulated events
+    coop <- C1_3prime_mat[rownames(C1_3prime_mat) == hillCat,]
+    if(hillCat == "Coop-Enh"){
+        matched <- matchedCoopEnhC1_3prime_mat
+    } else {
+        matched <- matchedCoopRepC1_3prime_mat
+    }
+    
+    # 10 nt bins are defined and the average signal determined for each
+    #   CE event. Averages are compared between cooperatively regulated
+    #   and the matched non-regulated CEe events using wilcox.test, followed
+    #   by FDR correction
+    FDR <- sapply(1:(351-binSize+1), function(i){
+        wilcox.test(coop[,i:(i+binSize-1)] %>% rowMeans(., na.rm = T),
+                    matched[,i:(i+binSize-1)] %>% rowMeans(., na.rm = T),
+                    alternative="greater")$p.value}) %>%
+        p.adjust(., method = "BH")
+    
+    # Final data.frame contains all significant bins (FDR <= 0.01)
+    C1_3prime_significantBins <- data.frame(
+        binStart = 1:(351-binSize+1),
+        binEnd = 1:(351-binSize+1)+(binSize-1),
+        FDR = FDR
+    ) %>% dplyr::filter(FDR <= 0.01)
+    
+    
+    # A_5prime
+    # Raw iCLIP signal is extracted for the cooperatively regulated CE events
+    #   and the matched non-regulated events
+    coop <- A_5prime_mat[rownames(A_5prime_mat) == hillCat,]
+    if(hillCat == "Coop-Enh"){
+        matched <- matchedCoopEnhA_5prime_mat
+    } else {
+        matched <- matchedCoopRepA_5prime_mat
+    }           
+
+    # 10 nt bins are defined and the average signal determined for each
+    #   CE event. Averages are compared between cooperatively regulated
+    #   and the matched non-regulated CEe events using wilcox.test, followed
+    #   by FDR correction
+    FDR <- sapply(1:(351-binSize+1), function(i){
+        wilcox.test(coop[,i:(i+binSize-1)] %>% rowMeans(., na.rm = T),
+                    matched[,i:(i+binSize-1)] %>% rowMeans(., na.rm = T),
+                    alternative="greater")$p.value}) %>%
+        p.adjust(., method = "BH")
+    
+    # Final data.frame contains all significant bins (FDR <= 0.01)
+    A_5prime_significantBins <- data.frame(
+        binStart = 1:(351-binSize+1),
+        binEnd = 1:(351-binSize+1)+(binSize-1),
+        FDR = FDR
+    ) %>% dplyr::filter(FDR <= 0.01)
+    
+    
+    # A_3prime
+    # Raw iCLIP signal is extracted for the cooperatively regulated CE events
+    #   and the matched non-regulated events
+    coop <- A_3prime_mat[rownames(A_3prime_mat) == hillCat,]
+    if(hillCat == "Coop-Enh"){
+        matched <- matchedCoopEnhA_3prime_mat
+    } else {
+        matched <- matchedCoopRepA_3prime_mat
+    }
+
+    # 10 nt bins are defined and the average signal determined for each
+    #   CE event. Averages are compared between cooperatively regulated
+    #   and the matched non-regulated CEe events using wilcox.test, followed
+    #   by FDR correction             
+    FDR <- sapply(1:(351-binSize+1), function(i){
+        wilcox.test(coop[,i:(i+binSize-1)] %>% rowMeans(., na.rm = T),
+                    matched[,i:(i+binSize-1)] %>% rowMeans(., na.rm = T),
+                    alternative="greater")$p.value}) %>%
+        p.adjust(., method = "BH")
+    
+    # Final data.frame contains all significant bins (FDR <= 0.01)
+    A_3prime_significantBins <- data.frame(
+        binStart = 1:(351-binSize+1),
+        binEnd = 1:(351-binSize+1)+(binSize-1),
+        FDR = FDR
+    ) %>% dplyr::filter(FDR <= 0.01)
+    
+    
+    # C2_5prime
+    # Raw iCLIP signal is extracted for the cooperatively regulated CE events
+    #   and the matched non-regulated events
+    coop <- C2_5prime_mat[rownames(C2_5prime_mat) == hillCat,]
+    if(hillCat == "Coop-Enh"){
+        matched <- matchedCoopEnhC2_5prime_mat
+    } else {
+        matched <- matchedCoopEnhC2_5prime_mat
+    }
+    
+    # 10 nt bins are defined and the average signal determined for each
+    #   CE event. Averages are compared between cooperatively regulated
+    #   and the matched non-regulated CEe events using wilcox.test, followed
+    #   by FDR correction                      
+    FDR <- sapply(1:(351-binSize+1), function(i){
+        wilcox.test(coop[,i:(i+binSize-1)] %>% rowMeans(., na.rm = T),
+                    matched[,i:(i+binSize-1)] %>% rowMeans(., na.rm = T),
+                    alternative="greater")$p.value}) %>%
+        p.adjust(., method = "BH")
+
+    # Final data.frame contains all significant bins (FDR <= 0.01)
+    C2_5prime_significantBins <- data.frame(
+        binStart = 1:(351-binSize+1),
+        binEnd = 1:(351-binSize+1)+(binSize-1),
+        FDR = FDR
+    ) %>% dplyr::filter(FDR <= 0.01)
+    
+    return(list(C1_3prime_significantBins, A_5prime_significantBins,
+                A_3prime_significantBins, C2_5prime_significantBins))
+}    
+
+tmp <- determineSignificantBins(hillCat = "Coop-Enh")
+C1_3prime_significantBins_Enh <- tmp[[1]]
+A_5prime_significantBins_Enh <- tmp[[2]]
+A_3prime_significantBins_Enh <- tmp[[3]]
+C2_5prime_significantBins_Enh <- tmp[[4]]
+
+tmp <- determineSignificantBins(hillCat = "Coop-Rep")
+C1_3prime_significantBins_Rep <- tmp[[1]]
+A_5prime_significantBins_Rep <- tmp[[2]]
+A_3prime_significantBins_Rep <- tmp[[3]]
+C2_5prime_significantBins_Rep <- tmp[[4]]
+rm(tmp)
+```
+
+After calculing the raw signal and significant bins, the RNAmaps can be
+generated.
+
+```{r}
+createRNAmap <- function(hillCat){
+    
+    # Correct data.frames are determined
+    if(hillCat == "Coop-Enh"){
+        RNAmapDf <- rbind(RNAmapDf_Enh, RNAmapDf_Enh_matched     )
+        
+        C1_3prime_significantBins <- C1_3prime_significantBins_Enh
+        A_5prime_significantBins <- A_5prime_significantBins_Enh
+        A_3prime_significantBins <- A_3prime_significantBins_Enh
+        C2_5prime_significantBins <- C2_5prime_significantBins_Enh
+    } else {
+        RNAmapDf <- rbind(RNAmapDf_Rep, RNAmapDf_Rep_matched)
+        
+        C1_3prime_significantBins <- C1_3prime_significantBins_Rep
+        A_5prime_significantBins <- A_5prime_significantBins_Rep
+        A_3prime_significantBins <- A_3prime_significantBins_Rep
+        C2_5prime_significantBins <- C2_5prime_significantBins_Rep
+    }
+    
+    # For each splice site a single plot is generated. The plots contain
+    #   raw signals, loess-smoothed signals, the underlying exons and 
+    #   intron and, if present, significant bins at the top of the plot
+    
+    p1 <- ggplot(RNAmapDf %>% dplyr::filter(spliceSite == "C1_3prime"),
+                 aes(x=pos, y=signal, col=set)) +
+            geom_line(alpha=0.4, size=.5) +
+            geom_smooth(se=FALSE, method = "loess", span = 0.1, size=1) +
+            geom_rect(mapping=aes(xmin=1, xmax=51, ymin=-0.009, ymax=0.001),
+                      fill="black", col="black") +
+            geom_rect(mapping=aes(xmin=52, xmax=351, ymin=-0.00445,
+                                  ymax=-0.00355), fill="darkgrey", col="black") +
+            scale_color_manual(values=c("Coop-Enh"="cornflowerblue",
+                                        "Coop-Rep"="salmon2",
+                                        "matched"="#606060")) +
+            scale_x_continuous(breaks=c(1,51,151, 251, 351),
+                               labels = c(-50, 0, 100, 200, 300)) +
+            scale_y_continuous(breaks=seq(0, 0.15, 0.05)) +
+            coord_cartesian(ylim=c(-0.005,0.15)) +
+            labs(x="Position relative to splice site",
+                 y="Normalized iCLIP signal", title="C1_3prime") +
+            myTheme +
+            theme(axis.text.x = element_text(angle=90, vjust=0.5, hjust=1))
+    
+    # If there are significant bins label them in the plot. Alpha is 0.25
+    #   leading to black if a position is part of at least 4 significant
+    #   bins
+    if(nrow(C1_3prime_significantBins) != 0){
+        p1 <- p1 + geom_rect(data=C1_3prime_significantBins,
+                             mapping=aes(xmin=binStart, xmax=binEnd,
+                                         ymin=0.15, ymax=0.154),
+                             fill="black", inherit.aes = FALSE,alpha=.25)
+        }
+    
+    p2 <- ggplot(RNAmapDf %>% dplyr::filter(spliceSite == "A_5prime"),
+                 aes(x=pos, y=signal, col=set)) +
+            geom_line(alpha=0.4, size=.5) +
+            geom_smooth(se=FALSE, method = "loess", span = 0.1, size=1) +
+            geom_rect(mapping=aes(xmin=301, xmax=351, ymin=-0.009, ymax=0.001),
+                      fill="black", col="black") +
+            geom_rect(mapping=aes(xmin=1, xmax=300,
+                                  ymin=-0.00445, ymax=-0.00355),
+                      fill="darkgrey", col="black") +
+            scale_color_manual(values=c("Coop-Enh"="cornflowerblue",
+                                        "Coop-Rep"="salmon2",
+                                        "matched"="#606060")) +
+            scale_x_continuous(breaks=c(1, 101, 201, 301, 351),
+                               labels = c(-300, -200, -100, 0, 50)) +
+            scale_y_continuous(breaks=seq(0, 0.15, 0.05)) +
+            coord_cartesian(ylim=c(-0.005,0.15)) +
+            labs(x="Position relative to splice site",
+                 y="Normalized iCLIP signal", title="A_5prime") +
+            myTheme +
+            theme(axis.text.x = element_text(angle=90, vjust=0.5, hjust=1))
+    
+    # If there are significant bins label them in the plot. Alpha is 0.25
+    #   leading to black if a position is part of at least 4 significant
+    #   bins
+    if(nrow(A_5prime_significantBins) != 0){
+        p2 <- p2 + geom_rect(data=A_5prime_significantBins,
+                             mapping=aes(xmin=binStart, xmax=binEnd,
+                                         ymin=0.15, ymax=0.154),
+                             fill="black", inherit.aes = FALSE,alpha=.25)
+        } 
+    
+    p3 <- ggplot(RNAmapDf %>% dplyr::filter(spliceSite == "A_3prime"),
+                 aes(x=pos, y=signal, col=set)) +
+            geom_line(alpha=0.4, size=.5) +
+            geom_smooth(se=FALSE, method = "loess", span = 0.1, size=1) +
+            geom_rect(mapping=aes(xmin=1, xmax=51, ymin=-0.009, ymax=0.001),
+                      fill="black", col="black") +
+            geom_rect(mapping=aes(xmin=52, xmax=351,
+                                  ymin=-0.00445, ymax=-0.00355),
+                      fill="darkgrey", col="black") +
+            scale_color_manual(values=c("Coop-Enh"="cornflowerblue",
+                                        "Coop-Rep"="salmon2",
+                                        "matched"="#606060")) +
+            scale_x_continuous(breaks=c(1,51,151, 251, 351),
+                               labels = c(-50, 0, 100, 200, 300)) +
+            scale_y_continuous(breaks=seq(0, 0.15, 0.05)) +
+            coord_cartesian(ylim=c(-0.005,0.15)) +
+            labs(x="Position relative to splice site",
+                 y="Normalized iCLIP signal", title="A_3prime") +
+            myTheme +
+            theme(axis.text.x = element_text(angle=90, vjust=0.5, hjust=1))
+    
+    # If there are significant bins label them in the plot. Alpha is 0.25
+    #   leading to black if a position is part of at least 4 significant
+    #   bins
+    if(nrow(A_3prime_significantBins) != 0){
+        p3 <- p3 + geom_rect(data=A_3prime_significantBins,
+                             mapping=aes(xmin=binStart, xmax=binEnd,
+                                         ymin=0.15, ymax=0.154),
+                             fill="black", inherit.aes = FALSE,alpha=.25)
+        }
+    
+    p4 <- ggplot(RNAmapDf %>% dplyr::filter(spliceSite == "C2_5prime"),
+                 aes(x=pos, y=signal, col=set)) +
+            geom_line(alpha=0.4, size=.5) +
+            geom_smooth(se=FALSE, method = "loess", span = 0.1, size=1) +
+            geom_rect(mapping=aes(xmin=301, xmax=351, ymin=-0.009, ymax=0.001), fill="black", col="black") +
+            geom_rect(mapping=aes(xmin=1, xmax=300, ymin=-0.00445, ymax=-0.00355), fill="darkgrey", col="black") +
+            scale_color_manual(values=c("Coop-Enh"="cornflowerblue",
+                                        "Coop-Rep"="salmon2",
+                                        "matched"="#606060")) +
+            scale_x_continuous(breaks=c(1, 101, 201, 301, 351),
+                               labels = c(-300, -200, -100, 0, 50)) +
+            scale_y_continuous(breaks=seq(0, 0.15, 0.05)) +
+            coord_cartesian(ylim=c(-0.005,0.15)) +
+            labs(x="Position relative to splice site",
+                 y="Normalized iCLIP signal", title="C2_5prime") +
+            myTheme +
+            theme(axis.text.x = element_text(angle=90, vjust=0.5, hjust=1))
+    
+    # If there are significant bins label them in the plot. Alpha is 0.25
+    #   leading to black if a position is part of at least 4 significant
+    #   bins
+    if(nrow(C2_5prime_significantBins) != 0){
+        p4 <- p4 + geom_rect(data=C2_5prime_significantBins,
+                             mapping=aes(xmin=binStart, xmax=binEnd,
+                                         ymin=0.15, ymax=0.154),
+                             fill="black", inherit.aes = FALSE,alpha=.25)
+        }
+    
+    egg::ggarrange(p1 + theme(axis.title.x = element_blank()),
+                  p2 + theme(axis.title.x = element_blank(),
+                             axis.title.y = element_blank(),
+                             axis.text.y = element_blank(),
+                             axis.ticks.y = element_blank()),
+                  p3 + theme(axis.title.x = element_blank(),
+                             axis.title.y = element_blank(),
+                             axis.text.y = element_blank(),
+                             axis.ticks.y = element_blank()),
+                  p4 + theme(axis.title.x = element_blank(),
+                             axis.title.y = element_blank(),
+                             axis.text.y = element_blank(),
+                             axis.ticks.y = element_blank()),
+                  nrow = 1, top = hillCat)
+}
+
+createRNAmap(hillCat = "Coop-Enh")
+createRNAmap(hillCat = "Coop-Rep")
+
+```
+
+It becomes clear that HNRNPH binding is enriched in introns of enhanced
+CE events and on the alternative exon of repressed CE events.
+
+# Session Information
+
+```{r}
+sessionInfo()
+```

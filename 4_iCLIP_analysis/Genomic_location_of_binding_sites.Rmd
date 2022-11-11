@@ -1,0 +1,626 @@
+---
+title: "Genomic location of HNRNPH binding sites"
+author:
+- name: Mario Keller
+  affiliation: Faculty of Biological Sciences, Goethe University Frankfurt
+output:
+  BiocStyle::html_document:
+      toc: TRUE
+      toc_float: TRUE
+      code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE,
+                      crop=NULL, results = TRUE)
+```
+
+```{r libraries}
+library(tidyverse)
+library(knitr)
+library(ggpubr)
+library(ggsci)
+library(ggvenn)
+library(GenomicRanges)
+library(rtracklayer)
+library(GenomicFeatures)
+library(ggrepel)
+library(forcats)
+```
+
+```{r defineTheme}
+myTheme <- theme_bw() +
+    theme(axis.text = element_text(size = 14, colour="black"),
+          axis.title = element_text(size=16, colour="black"),
+          axis.ticks=element_line(color="black"),
+          axis.ticks.length=unit(.15, "cm"),
+          panel.border=element_rect(color="black", fill = NA),
+          panel.background = element_blank(),
+          plot.background = element_blank(),
+          legend.text = element_text(size=12),
+          legend.position = "none")
+```
+
+```{r paths}
+projectDir <- "/Users/mariokeller/projects/HNRNPH_project/Tretow_et_al_2023"
+
+iClipDir <- paste0(projectDir, "/4_iCLIP_analysis")
+majiqDir <- paste0(projectDir,"/2_MAJIQ_AS_analysis")
+dataDir <- paste0(projectDir, "/data")
+```
+
+# Background
+
+Once the HNRNPH binding sites were defined, it was of interest to
+characterize them in more detail. This includes their overlap 
+with genes of different biotypes, features of protein-coding genes and
+genes with regulated AS events.
+
+# Data
+
+HNRNPH binding sites are loaded from a RDS-File created with
+*Binding_site_definition.R*.
+
+TPM values of control samples are loaded from a RDS-File created with
+*Calculate_TPMs_in_Controls.R*.
+
+Annotation is loaded from a zipped GTF-File.
+
+Regulated AS events are loaded from a RDS-File created with
+*MAJIQ_AS_analysis.Rmd*.
+
+Regulated and non-regulated CE minigenes are loaded from RDS-Files created
+with *Create_CE_minigenes.R*.
+
+```{r}
+bindingSites <- readRDS(paste0(iClipDir,
+                               "/rds_files/HNRNPH_binding_sites.rds"))
+
+controlTPMs <- readRDS(paste0(iClipDir,
+                               "/rds_files/controlTPMs.rds"))
+
+anno <- import(paste0(dataDir, "/gencode.v39.annotation.gtf.gz"))
+
+regulatedEvents <- readRDS(paste0(majiqDir, "/rds_files/regulatedEvents.rds"))
+
+regulatedMiniGenes <- readRDS(paste0(iClipDir, "/rds_files/regulatedMiniGenes.rds"))
+nonRegulatedMiniGenes <- readRDS(paste0(iClipDir, "/rds_files/nonregulatedMiniGenes.rds"))
+
+```
+
+The annotation is filtered for genes with a support level $\le$ 2 and
+transcripts with support level $\le$ 3 or NA.
+
+```{r}
+#Filter by gene support level
+anno$level <- as.numeric(anno$level)
+anno <- anno[anno$level <= 2] 
+
+#Filter by transcript support level
+anno$transcript_support_level[is.na(anno$transcript_support_level)] <- 0
+anno$transcript_support_level[anno$transcript_support_level == "NA"] <- Inf
+anno$transcript_support_level <- as.numeric(anno$transcript_support_level)
+anno <- anno[anno$transcript_support_level <= 3]
+
+#Filter out transcripts without genes and genes without transcripts
+tmpGenes <- anno[anno$type =="gene"]
+tmpTranscripts <- anno[anno$type =="transcript"]
+
+geneBlackList <- tmpTranscripts[!tmpTranscripts$gene_id %in% tmpGenes$gene_id]$gene_id %>% unique
+geneBlackList <- c(geneBlackList, tmpGenes[!tmpGenes$gene_id %in% tmpTranscripts$gene_id]$gene_id %>% unique)
+
+anno <- anno[!anno$gene_id %in% geneBlackList]
+
+# Create TxDb from annotation
+annoTxDb = makeTxDbFromGRanges(anno)
+
+rm(tmpGenes, tmpTranscripts, geneBlackList)
+```
+
+The regulated and non-regulated CE events are stored as GRanges objects
+with 3 ranges (one for each involved exon). For simplicity evens are
+reduced to the a single range starting at the start of the leftmost exon
+and ending at the end of the rightmost exon.
+
+```{r}
+
+regulatedMiniGenes <- lapply(regulatedMiniGenes, function(gr){
+  event_id <- gr$event_id %>% unique
+  hillCat <- gr$hillCat %>% unique
+  # range() reduces the three ranges into one range
+  gr <- range(gr)
+  gr$event_id <- event_id
+  gr$hillCat <- hillCat
+  return(gr)
+}) %>% as(., "GRangesList") %>% unlist
+
+
+nonRegulatedMiniGenes <- lapply(nonRegulatedMiniGenes, function(gr){
+  event_id <- gr$event_id %>% unique
+  # range() reduces the three ranges into one range
+  gr <- range(gr)
+  gr$event_id <- event_id
+  gr$hillCat <- "nonReg"
+  return(gr)
+}) %>% as(., "GRangesList") %>% unlist
+
+# Combine the minigenes into a single GRanges object
+miniGenes <- c(regulatedMiniGenes, nonRegulatedMiniGenes)
+
+rm(regulatedMiniGenes, nonRegulatedMiniGenes)
+
+```
+
+# Genomic distribution of HNRNPH binding sites
+
+In total there are `r format(length(bindingSites), big.mark=",")` called
+HNRNPH binding sites.
+
+## Overlaps with genes
+
+To check the fraction of binding sites overlapping different classes of
+genes, all genes surviving the mentioned filtering are extracted via
+genes() from the TxDb object. In addition, the gene_type is changed to
+"other" if it is not protein_coding or lncRNA.
+
+```{r}
+# Extract genes. Note that this leads to a different resuls than
+#   anno[anno$type == 'gene]. Due to the filtering above, there are cases where
+#   none of the remaining transcripts reaches the gene start or end. genes()
+#   truncates the gene boundaries to the leftmost and rightmost transcript start
+#   and end position.
+genes = genes(annoTxDb)
+
+# This step adds meta information to the genes
+idx = match(genes$gene_id, anno$gene_id) 
+elementMetadata(genes) = cbind(elementMetadata(genes), elementMetadata(anno)[idx,])
+
+# Adjust the gene_type
+genes$gene_type <- ifelse(genes$gene_type %in%  c("protein_coding", "lncRNA"),
+                          genes$gene_type,
+                          "other")
+
+# Remove the version
+genes$gene_id <- genes$gene_id %>%
+    strsplit(., ".", fixed=T) %>%
+    sapply(., "[[", 1)
+
+```
+
+As a first step, a biotype  was assigned to each binding sites based on the
+overlapping genes. In the case of two or more overlapping genes with
+different biotypes the following hierarchy was used:
+protein_coding \> lncRNA \> other.
+
+```{r}
+
+#Find overlaps
+geneOverlaps <- findOverlaps(bindingSites, genes)
+
+# Turn the Hits object into a data.frame, adjust the column names and add
+#   the biotype information
+geneOverlaps <- geneOverlaps %>%
+    as.data.frame %>%
+    dplyr::rename(bindingSites = queryHits, genes = subjectHits) 
+geneOverlaps$biotype <- genes$gene_type[geneOverlaps$genes]
+
+
+# Group overlaps by binding site and assign based on the overlapping genes
+#   exactly one biotype to the binding site
+biotypeOverview <- geneOverlaps %>%
+    group_by(bindingSites) %>%
+    summarize(bindingSites = bindingSites[1],
+              biotype=case_when("protein_coding" %in% biotype  ~ "protein_coding",
+                                "lncRNA" %in% biotype ~ "lncRNA",
+                                TRUE ~ "other"))
+
+# Initialize the biotype information.
+bindingSites$biotype <- "no overlap"
+
+# Add the biotype determined above to the binding site
+bindingSites$biotype[biotypeOverview$bindingSites] <- biotypeOverview$biotype
+```
+
+Based on the assigned biotypes a pie chart is prepared.
+
+```{r}
+
+# Create the underlying data.frame
+pieDf <- data.frame(biotype=factor(c("protein_coding", "lncRNA",
+                                     "other", "no overlap"),
+                                   levels=c("protein_coding", "lncRNA",
+                                            "other", "no overlap")),
+           Freq=c(sum(bindingSites$biotype == "protein_coding"),
+                  sum(bindingSites$biotype == "lncRNA"),
+                  sum(bindingSites$biotype == "other"),
+                  sum(bindingSites$biotype == "no overlap"))) %>%
+  mutate(perc=round((Freq/sum(Freq)*100),1)) %>%
+  mutate(lab.ypos=(cumsum(c(0, perc)) + c(perc / 2, .01))[1:length(perc)])
+
+# A pie chart is created showing the fraction of binding sites overlapping a
+#   certain biotype.
+ggplot(pieDf, aes(x="", y=perc, fill = biotype)) +
+  scale_fill_lancet() +
+  geom_col(color = 'black', position = position_stack(reverse = TRUE),
+           show.legend = TRUE) +
+  geom_text_repel(aes(x = 1.4, y = lab.ypos, label = paste(perc, "%")),
+                  nudge_x = .3, segment.size = .7, show.legend = F) +
+  coord_polar('y', start = 0.1) +
+  theme_void()
+```
+
+Here is the underlying data.frame as a table:
+
+```{r}
+pieDf %>%
+    kable(., "html") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(height="300px", width = "94%")
+```
+
+The vast majority of binding sites overlaps transcripts of protein-coding
+genes. Around 9% are located in intergenic-regions and could be located
+on transcripts of yet not annotated genes.
+
+## Fraction of bound genes
+
+Of interest is also the fraction of bound genes for each biotype. One
+problem is that not every gene is expressed, leading to false
+conclusions when all genes of a biotype are taken into account. To
+overcome this problem an expression cut-off is applied to only consider
+expressed genes.
+
+As a first step, the number of expressed genes and the fraction of bound
+genes is determined in dependence on an increasing expression cut-off.
+Expression is estimated by the averaged TPM values of the knockdown and
+overexpression controls.
+
+```{r}
+
+# Remove the version
+controlTPMs$geneID <- controlTPMs$geneID %>%
+    strsplit(., ".", fixed=TRUE) %>%
+    sapply(., "[[", 1)
+
+# Keep only genes that survived the initial filtering (gene and transcript
+#   support level)
+controlTPMs <- controlTPMs %>%
+    dplyr::filter(geneID %in% genes$gene_id)
+
+# Add the binding information to the genes
+genes$bound <- FALSE
+genes$bound[findOverlaps(genes, bindingSites) %>% queryHits %>% unique] <- TRUE
+
+# These are all genes that overlap with a binding site (n=11,943)
+genesBound <- subsetByOverlaps(genes, bindingSites)
+
+# Cut-off ranges from 0 to 80 with a step size of 1
+cutoffs <- seq(0,80,1)
+
+# The number of expressed genes and the fraction of expressed genes bound
+#   is determined at each of the 81 cutoffs
+boundGenesAtCutoff <- lapply(cutoffs, function(cutoff){
+    # Genes expressed at cut-off
+    expressedAtCutoff <- controlTPMs %>%
+        dplyr::filter(Allmerge >= cutoff) %>%
+        pull(geneID)
+    # Number of expressed genes bound by HNRNPH
+    nBound <- sum((expressedAtCutoff %in% genes[genes$bound]$gene_id))
+    
+    return(data.frame(cutoff=cutoff,
+                      expressed=length(expressedAtCutoff),
+                      fractionBound = nBound/length(expressedAtCutoff)))
+}) %>% bind_rows()
+
+```
+
+The results are shown as a combination of a line and bar chart with two
+y-axes.
+
+```{r}
+
+
+# This coefficient is required for the second y-axis in the plot
+coeff <- max(boundGenesAtCutoff$expressed) /
+    max(boundGenesAtCutoff$fractionBound)
+
+# The plot is a combination of a line and bar chart using two y-axes.
+ggplot() +
+  geom_col(data=boundGenesAtCutoff, aes(x=cutoff, y=expressed/coeff),
+           fill="springgreen4", width=1) +
+  geom_line(data=boundGenesAtCutoff, aes(x=cutoff, y=fractionBound), size=1) +
+  scale_x_continuous(breaks=seq(0,80,20)) +
+  scale_y_continuous(name = "Fraction of genes bound",
+                     limits = c(0,max(boundGenesAtCutoff$fractionBound)),
+    sec.axis = sec_axis(trans=~.*coeff, name="Number of expressed genes")) +
+  labs(x="TPM threshold", y="") +
+  myTheme +
+  theme(
+    axis.title.y.right = element_text(color = "springgreen4", size=16),
+    axis.ticks.y.right = element_line(color="springgreen4"),
+    axis.text.y.right =  element_text(size = 14, colour="springgreen4")
+  ) 
+
+```
+
+After observing that the fraction of bound genes is more or less
+stabilized at a TPM cut-off of 1. Genes were considered as expressed if
+their averaged TPM value was $\ge$ 1.
+
+```{r}
+
+genes$expressed <- FALSE
+
+genes$expressed[genes$gene_id %in%
+                    controlTPMs$geneID[controlTPMs$Allmerge >= 1]] <- TRUE
+
+genesExpressed <- genes[genes$expressed]
+```
+
+Based on the information if genes are expressed and if they are bound, the 
+fraction of expressed genes bound by HNRNPH was determined for each 
+biotype.
+
+```{r}
+
+genesExpressedBound <- genes[genes$expressed & genes$bound]
+
+# Determine the fraction of bound genes per biotype
+fractionBoundGenes <- data.frame(
+    biotype=factor(c("protein_coding", "lncRNA", "other"),
+                   levels=c("protein_coding", "lncRNA", "other")),
+    bound = c(sum(genesExpressedBound$gene_type == "protein_coding"),
+              sum(genesExpressedBound$gene_type == "lncRNA"),
+              sum(genesExpressedBound$gene_type == "other")),
+    nonBound = c(sum(genesExpressed$gene_type == "protein_coding") -
+                     sum(genesExpressedBound$gene_type == "protein_coding"),
+                 sum(genesExpressed$gene_type == "lncRNA") -
+                     sum(genesExpressedBound$gene_type == "lncRNA"),
+                 sum(genesExpressed$gene_type == "other") -
+                     sum(genesExpressedBound$gene_type == "other"))) %>%
+    pivot_longer(., cols=2:3, values_to="nGenes", names_to = "bound") %>%
+    mutate(bound = ifelse(bound == "bound", TRUE, FALSE)) %>%
+    mutate(bound=factor(bound, levels=c(FALSE, TRUE))) %>%
+    group_by(biotype) %>%
+    mutate(fraction = nGenes / sum(nGenes)) %>% 
+    ungroup
+    
+# A stacked barchart is created for each of the three biotypes. Stacks
+#   indicate the fraction of genes bound and not bound by HNRNPH. In addition,
+#   the percentage of genes bound and not bound is added.
+ggplot(fractionBoundGenes, aes(x=biotype, y=nGenes, fill=bound)) +
+  scale_fill_lancet() +
+  geom_col(position = "fill") +
+  geom_text(aes(label = scales::percent(fraction)), position = 'fill') + 
+  labs(y="Fraction of genes bound by HNRNPH") +
+  myTheme +
+  theme(legend.position = "right")
+```
+
+Here is the underlying data.frame as a table:
+
+```{r}
+fractionBoundGenes %>%
+    kable(., "html") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(height="300px", width = "94%")
+```
+
+HNRNPH binds transcripts of around 80% of all expressed protein-coding 
+genes, while the fraction is lower for other biotypes.
+
+## Overlaps with features of protein-coding genes
+
+As most binding sites overlap protein-coding genes, it was of interest
+to check in which features these are located. Using GenomicFeatures
+functions, CDS, Intron, 5'UTR and 3'UTR regions (features) were
+extracted.
+
+Next, to each binding site overlapping a protein-coding gene, one of the 
+four features is assigned. In the case of multiple different
+overlapping features (e.g. 2xCDS and 1xIntron), the more abundant one is
+assigned (CDS for the example). If there was still a tie (e.g. 
+2xCDS and 2xIntron), the following hierarchy is used :
+CDS \> UTR5 \> UTR3 \> Intron. 
+In rare cases there is no overlap at all, which occurs when a gene
+harbors transcripts in the beginning and end but lacks any transcripts
+in the middle (could also be due to annotation filtering). These cases are
+considered as "Outside".
+
+```{r}
+
+# Subset binding sites to those overlapping protein_coding genes
+bindingSitesPCGs <- subsetByOverlaps(bindingSites,
+                                     genes[genes$gene_type == "protein_coding"])
+
+# Count for each binding site the overalp with the four features. In some cases
+#   a binding site overlaps no feature, which is defined as "Outside".
+CDS = cds(annoTxDb) %>%
+    countOverlaps(bindingSitesPCGs,.)
+Intron = unlist(intronsByTranscript(annoTxDb)) %>%
+    countOverlaps(bindingSitesPCGs,.)
+UTR3 = unlist(threeUTRsByTranscript(annoTxDb)) %>%
+    countOverlaps(bindingSitesPCGs,.)
+UTR5 = unlist(fiveUTRsByTranscript(annoTxDb)) %>%
+    countOverlaps(bindingSitesPCGs,.)
+overlapCounts <- data.frame(CDS, UTR5, UTR3, Intron)
+overlapCounts$Outside <- ifelse(rowSums(overlapCounts)==0, 1, 0)
+
+# A hierarchy is defined for ties
+featureHierarchy <- c("CDS", "UTR5", "UTR3", "Intron", "Outside")
+
+# Arrange the columns by the defined hierarchy
+overlapCounts <- overlapCounts[featureHierarchy] %>% as.matrix
+
+# Assign to each binding site the feature with the highest number.
+names = colnames(overlapCounts)
+feature = apply(overlapCounts, 1, function(x){ names[which.max(x)] })
+
+# Add the final feature to the binding site
+bindingSitesPCGs$feature = feature
+```
+
+Based on the assigned features a pie chart is prepared.
+
+```{r}
+
+# Create the underlying data.frame. Note that "Outside" is not considered.
+pieDf <- data.frame(feature=factor(c("CDS", "UTR5", "UTR3", "Intron"),
+                                   levels=c("CDS", "UTR5", "UTR3", "Intron")),
+           Freq=c(sum(bindingSitesPCGs$feature == "CDS"),
+                  sum(bindingSitesPCGs$feature == "UTR5"),
+                  sum(bindingSitesPCGs$feature == "UTR3"),
+                  sum(bindingSitesPCGs$feature == "Intron"))) %>%
+  mutate(perc=round((Freq/sum(Freq)*100),1)) %>%
+  mutate(lab.ypos=(cumsum(c(0, perc)) + c(perc / 2, .01))[1:length(perc)])
+
+# A pie chart is created showing the fraction of binding sites overlapping a
+#   certain feature
+ggplot(pieDf, aes(x="", y=perc, fill = feature)) +
+  scale_fill_manual(values=sapply(4,colorRampPalette(c("#003C77", "#81B4E7")))) +
+  geom_col(color = 'black', position = position_stack(reverse = TRUE),
+           show.legend = TRUE) +
+  geom_text_repel(aes(x = 1.4, y = lab.ypos, label = paste(perc, "%")),
+                  nudge_x = .3, segment.size = .7, show.legend = F) +
+  coord_polar('y', start = 0.1) +
+  theme_void()
+```
+
+Here is the underlying data.frame as a table:
+
+```{r}
+pieDf %>%
+    kable(., "html") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(height="300px", width = "94%")
+```
+
+Nearly 90% of the binding sites on protein-coding genes are located 
+in introns and around 8% in the 3'UTR. However, since introns make up
+most of the length of a gene, this is not very surprising.
+
+# Binding on alternative spliced genes
+
+## Overlaps with alternatively spliced genes
+
+Another interesting thing to check is whether genes with regulated AS
+events are bound by HNRNPH. To answer this quesiton, all genes with at
+least one regulated AS event are loaded, followed by a filtering
+for genes defined as expressed. The overlap of genes with regulated AS
+events and genes bound by HNRNPH was afterwards determined.
+
+```{r}
+
+# Extract the gene identifier of all genes with at least one regulated AS event
+genesWithRegulatedASevent <- regulatedEvents$module_id %>% 
+    strsplit(., ".", fixed=T) %>%
+    sapply(., "[[", 1) %>% unique
+
+# Filter for genes defined as expressed (TPM >= 1)
+genesWithRegulatedASevent <- genesWithRegulatedASevent[
+    genesWithRegulatedASevent %in% genes[genes$expressed]$gene_id
+    ]
+
+vennList <- list('Genes with regulated AS event' = genesWithRegulatedASevent,
+                 'Bound genes' = genes$gene_id[genes$expressed & genes$bound])
+
+ggvenn(data=vennList, text_size=4, set_name_size=4.5, stroke_size=.5) +
+  scale_y_continuous(limits = c(-1, 1.5))
+
+```
+
+One can see that more than 90% of the genes with regulated AS events are
+bound by HNRNH. Yet the question is whether this overlap is significant.
+To answer this question a Fisher's exact test was applied.
+
+```{r}
+total <- genes[genes$expressed] %>% length
+
+
+reg_true__bound_true <- intersect(genesWithRegulatedASevent,
+                                  genes$gene_id[genes$expressed &
+                                                    genes$bound]) %>% length
+reg_true__bound_false <- length(genesWithRegulatedASevent) - reg_true__bound_true
+reg_false__bound_true <- length(genes[genes$expressed &
+                                          genes$bound]) - reg_true__bound_true
+reg_false__bound_false <- total -
+    (reg_true__bound_true + reg_true__bound_false +reg_false__bound_true)
+
+
+contingencyTable <- matrix(c(reg_true__bound_true, reg_true__bound_false,
+                             reg_false__bound_true, reg_false__bound_false),
+                           dimnames=list(c("bound_true", "bound_false"),
+                                         c("reg_true", "reg_false")), nrow=2)
+fisherRes <- fisher.test(contingencyTable, alternative = "greater")
+
+contingencyTable
+
+fisherRes
+```
+
+We can see that the overlap is significant (P-value:
+`r fisherRes$p.value`.
+
+## Overlaps with regulated and non-regulated CE events
+
+Having established that almost all genes with regulated AS events are
+bound by HNRNPH, we asked for the CE events whether the binding actually
+occurs in the alternatively spliced region. The alternatively spliced region
+of CE events (3 exons involved) was defined as the region starting at the
+leftmost exon and the ending at the rightmost exon.
+
+For the cooperatively enhanced (Coop-Enh), repressed (Coop-Rep) and non-
+regulated events (nonReg) we determined if they are bound (plot1) and 
+also how many binding sites are located in their region (plot2).
+
+```{r}
+
+# Store binding information (TRUE/FALSE) and the number of overlapping
+#   binding sites
+miniGenes$bound <- countOverlaps(miniGenes, bindingSites) > 0
+miniGenes$nBSs <- countOverlaps(miniGenes, bindingSites)
+
+# Filter for cooperative enhanced, cooperatively repressed and non-regulated
+#   events. Limit more than 5 BSs to ">5".
+miniGenes <- miniGenes %>%
+    as.data.frame %>%
+    dplyr::select(hillCat, bound, nBSs) %>%
+    dplyr::filter(hillCat %in% c("Coop-Enh", "Coop-Rep", "nonReg")) %>%
+    mutate(hillCat = factor(hillCat, levels=c("Coop-Enh", "Coop-Rep", "nonReg"))) %>%
+    mutate(nBSs=ifelse(nBSs > 5, ">5", nBSs)) %>%
+    mutate(nBSs = factor(nBSs, levels=c("0", "1", "2", "3", "4", "5", ">5")))
+
+miniGenes %>%
+    ggplot(., aes(x=hillCat, fill=bound)) + 
+        geom_bar(position="fill") +
+        geom_text(data=. %>% dplyr::count(hillCat), aes(label = n, x=hillCat, y=1.05), inherit.aes=F) +
+        scale_fill_manual(values=c("FALSE" = "grey", "TRUE" = "black")) +
+        labs(x="set", y="Fraction of cassette exon events") +
+        myTheme +
+        theme(legend.position = "right")
+
+miniGenes %>%
+    ggplot(., aes(x=hillCat, fill=nBSs)) + 
+        geom_bar(position="fill") +
+        geom_text(data=. %>% dplyr::count(hillCat), aes(label = n, x=hillCat, y=1.05), inherit.aes=F) +
+        scale_fill_lancet() +
+        labs(x="set", y="Fraction of cassette exon events") +
+        myTheme +
+        theme(legend.position = "right")
+```
+
+The highest fraction of binding is observed for the cooperatively enhanced
+CE events, followed by the repressed ones. In addition, for all three sets
+a lot of the events have more than 5 binding sites. However, what must be
+taken into account is that the events could have a different length. Also
+the length of the regulatory region (the cassette exon or flanking introns)
+could have an impact on the number of binding sites.
+
+# Session Information
+
+```{r}
+sessionInfo()
+```

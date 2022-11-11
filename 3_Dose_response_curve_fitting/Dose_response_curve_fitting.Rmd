@@ -1,0 +1,784 @@
+---
+title: "Dose-response curve fitting for CE, ALE and IR events"
+author:
+- name: Mario Keller
+  affiliation: Faculty of Biological Sciences, Goethe University Frankfurt
+output:
+  BiocStyle::html_document:
+      toc: TRUE
+      toc_float: TRUE
+      code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE,
+                      results = TRUE, crop=NULL)
+```
+
+```{r libraries}
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(ggpubr)
+library(ggsci)
+library(drc)
+library(aomisc)
+library(Gviz)
+library(GenomicFeatures)
+```
+
+```{r defineTheme}
+myTheme <- theme_bw() +
+    theme(axis.text = element_text(size = 14, colour="black"),
+          axis.title = element_text(size=16, colour="black"),
+          axis.ticks=element_line(color="black"),
+          axis.ticks.length=unit(.15, "cm"),
+          panel.border=element_rect(color="black", fill = NA),
+          panel.background = element_blank(),
+          plot.background = element_blank(),
+          legend.text = element_text(size=12),
+          legend.position = "none")
+```
+
+```{r paths}
+projectDir <- "/Users/mariokeller/projects/HNRNPH_project/Tretow_et_al_2023"
+
+majiqDir <- paste0(projectDir, "/2_MAJIQ_AS_analysis")
+drcDir <- paste0(projectDir, "/3_Dose_response_curve_fitting")
+dataDir <- paste0(projectDir, "/data")
+```
+
+# Background
+
+Based on the MAJIQ quantification, dose-response curves should be 
+fitted for each CE, ALE and IR event identified as regulated in
+*MAJIQ_AS_analysis.Rmd*. The purpose of the fitting is to identify
+coopreatively regulated events based on the fitted Hill coefficient
+(nH). Events with an absolute Hill coefficient > 1 are expected to
+show a switch-like splicing response in dependence on HNRNPH 
+protein levels.
+
+# Data
+
+Regulated cassette exon (CE), alternative last exon (ALE) and intron
+retention (IR) events are loaded from RDS-Files created in
+*MAJIQ_AS_analysis.Rmd*. The loaded data.frames contain the PSI and
+$\Delta$PSI quantifications as well as additional meta information.
+
+```{r input}
+regulatedCEs <- readRDS(paste0(majiqDir,"/rds_files/regulatedCEs.rds"))
+regulatedALEs <- readRDS(paste0(majiqDir,"/rds_files/regulatedALEs.rds"))
+regulatedIRs <- readRDS(paste0(majiqDir,"/rds_files/regulatedIRs.rds"))
+```
+
+Here is the number of regulated events per AS event class for which a
+fitting is performed:
+
+-   CE events: `r nrow(regulatedCEs)`
+-   ALE events: `r nrow(regulatedALEs)`
+-   IR events: `r nrow(regulatedIRs)`
+
+# Dose-response curve fitting
+
+## Preparation
+
+The relative protein concentration of replicates is averaged for each
+knockdown and overexpression condition. Protein levels were measured by
+Western Blot analysis and signals of knockdown and overexpression
+experiments normalized to their matched controls.
+
+Here are the used concentrations:
+
+```{r}
+proteinConcKD <- c(KD_10000=mean(c(54,39)), KD_05000=mean(c(51,47)),
+                   KD_01000=mean(c(54,49,76)), KD_00500=mean(c(80,68,98)),
+                   KD_00250=mean(c(84,80,91)), KD_00100=mean(c(102,98,81)),
+                   KD_00050=mean(c(95,114,81)))
+
+proteinConcOE <- c(OE_00600=mean(c(134.8948469, 107.5182327, 123.7675621)),
+                   OE_01000=mean(c(129.0983149, 139.7401286, 161.1825442)),
+                   OE_02500=mean(c(142.8957191, 143.8951726, 242.539298)))
+
+proteinConc <- c(proteinConcKD, Contr=100, proteinConcOE)
+rm(proteinConcKD, proteinConcOE)
+
+# This block creates a table for the html output
+proteinConc %>%
+    as.data.frame() %>%
+    tibble::rownames_to_column(var="condition") %>%
+    dplyr::rename(., relative_concentration = .) %>%
+    kable(., "html") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(height="300px", width = "94%")
+```
+
+In addition, vectors with comparison and sample names are defined.
+
+```{r}
+comparisons <- c("KD_10000", "KD_05000", "KD_01000", "KD_00500", "KD_00250",
+                 "KD_00100", "KD_00050", "OE_00600", "OE_01000", "OE_02500")
+
+samples <- c(paste0("KD_10000_", 1:2), paste0("KD_05000_", 1:2), paste0("KD_01000_", 1:3),
+             paste0("KD_00500_", 1:3), paste0("KD_00250_", 1:3), paste0("KD_00100_", 1:3),
+             paste0("KD_00050_", 1:3), paste0("KD_Contr_", 1:3), paste0("OE_Contr_", 1:3),
+             paste0("OE_00600_", 1:3), paste0("OE_01000_", 1:3), paste0("OE_02500_", 1:3))
+```
+
+For each event a LL.4() is fitted using the formula dPSI\~proteinConc.
+In addition, lower and upper boundaries were set for the parameters to
+be fitted:
+
+-   nH (the Hill coefficient): -Inf to +Inf (non constraints)
+-   ec50: 0 to +Inf (concentration can not be negative)
+-   min: -max(ContrPSI)\* to 0
+-   max: 0 to 1-min(ContrPSI)\*
+
+\* ContrPSI is a numeric vector of length 2 containing the PSI value of
+the knockdown and overexpression control for the fitted event
+
+The output is a drc model object to which I add some meta information
+like the event identifier, the name of the underlying gene as well as a
+goodness-of-fit metric called pseudoR2, which is later used for the
+removal of bad fittings.
+
+The fitting and the plotting of dose-response curves is implemented in
+functions that are called *fitDRC()* and *plotDRC()*, respectively.
+
+```{r}
+
+# Input is the unique event identifier as well as one of the regulation
+#   data.frames (regulatedCEs, regulatedALEs and regulatedIRs)
+fitDRC <- function(eventID, regulatedDf){
+    
+    # Extract the name of the underlying gene
+    gene_name <- regulatedDf %>% filter(event_id == eventID) %>% pull(gene_name)
+    
+    # In this block the dPSI values of the event are extracted.Setting comparison
+    #   as factor is needed to bring the dPSIs in the correct order via arrange()
+    dPSI <- regulatedDf %>% filter(event_id == eventID) %>%
+    dplyr::select(ends_with("median_dpsi")) %>%
+    pivot_longer(everything(), names_to = "comparison") %>%
+    mutate(comparison=strsplit(comparison, ".", fixed=T) %>% sapply(., "[[", 1)) %>%
+    mutate(comparison=factor(comparison, levels=comparisons)) %>%
+    arrange(comparison) %>%
+    pull(value)
+    
+    # The dPSI of the Control is set to 0 and inserted between KD_00050
+    #   (position 7) and OE_00600 (position 8)
+    dPSI <- c(dPSI[1:7], 0, dPSI[8:10])
+    
+    # PSIs of the two controls are extracted. These are needed to define
+    #   the lower and upper limits of the min and max parameter, respectively.
+    ContrPSI <- regulatedDf %>% filter(event_id == eventID) %>%
+        dplyr::select(ends_with("Contr_median_psi")) %>%
+        pivot_longer(everything()) %>%
+        pull(value)
+    
+    # The protein concentrations and the dPSI values are combined in
+    #   a data.frame that is used as input for the drm() function.
+    fittingDf <- data.frame(proteinConc, dPSI)
+    
+    # The drm() function fits the LL.4(). paramter constraints are defined
+    #   via lowerl and upperl.
+    m <- drm(
+        formula = dPSI ~ proteinConc, data = fittingDf,
+        fct = LL.4(names = c("nH", "min", "max", "ec50")),
+        lowerl=c(-Inf, -(max(ContrPSI)), 0, 0),
+        upperl=c(Inf, 0, 1-min(ContrPSI), Inf))
+    
+    # Meta information is added to the model object. R2nls() of the aomisc
+    #   package is used to compute the pseudoR2 metric
+    m$event_id <- eventID
+    m$gene_name <- gene_name
+    m$nH <- coef(m)[1]
+    m$min <- coef(m)[2]
+    m$max <- coef(m)[3]
+    m$ec50 <- coef(m)[4]
+    m$pseudoR2 <- R2nls(m)$PseudoR2
+    
+    return(m)
+}
+
+# Input is a drm model. In addition, the user defines the color and size of the
+#   points as well as the aspect ratio.
+plotDRC <- function(m, myCol = "#DC0000FF", pointSize = 3, aspectRatio = 1){
+    
+    # The model is used to predict dPSI values based on the provided values
+    fittedData <- data.frame(x=seq(46,177,1),
+                             y=predict(m, data.frame(proteinConc=seq(46,177,1))))
+    
+    # Fitted values are shown as geom_line() and the original data points as 
+    #   geom_points(). The original data points can be extracted from the model.
+    ggplot(fittedData,aes(x=x,y=y)) +
+        geom_point(data=m$origData, aes(x=proteinConc, y=dPSI), pch=21,
+                   fill=myCol, size=pointSize) +
+        geom_line(size=1) +
+        labs(x="Protein concentration (%)", y=expression(Delta*PSI),
+             title=paste0(m$event_id, " - ",
+                          m$gene_name, "\nnH=", round(m$nH,1),
+                          " - EC50=", round(m$ec50,1),
+                          " - pR2=", round(m$pseudoR2,2))) +
+        myTheme +
+        theme(plot.title = element_text(size=6), aspect.ratio = aspectRatio)
+}
+```
+
+## Results
+
+The fitting is performed for the regulated CE, ALE and IR events.
+
+```{r}
+
+# For each event the fitDRC() function is executed
+fittedCEs <- lapply(regulatedCEs$event_id, fitDRC, regulatedCEs) %>% 
+    setNames(., regulatedCEs$event_id)
+fittedALEs <- lapply(regulatedALEs$event_id, fitDRC, regulatedALEs) %>%
+    setNames(., regulatedALEs$event_id)
+fittedIRs <- lapply(regulatedIRs$event_id, fitDRC, regulatedIRs) %>%
+    setNames(., regulatedIRs$event_id)
+```
+
+Individual summaries are prepared for CEs, ALEs and IRs. The Top5
+fitting results are shown (ordered by descending pseudoR2).
+
+```{r}
+
+# The data.frames comprise for each event the fitted parameters and 
+#   additional information
+
+# For each event class the Top5 fitted events are shown in a table in
+#   the html output
+
+summaryCEs <- data.frame(event_id=names(fittedCEs),
+                         gene_name=sapply(fittedCEs, "[[", "gene_name"),
+                         nH=sapply(fittedCEs, "[[", "nH"),
+                         ec50=sapply(fittedCEs, "[[", "ec50"),
+                         min=sapply(fittedCEs, "[[", "min"),
+                         max=sapply(fittedCEs, "[[", "max"),
+                         pseudoR2=sapply(fittedCEs, "[[", "pseudoR2"))
+
+summaryCEs %>%
+    arrange(dplyr::desc(pseudoR2)) %>%
+    dplyr::slice(1:5) %>%
+    kable(., "html", align="c", caption="Fitted cassette exon events") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(height="300px", width = "94%")
+
+summaryALEs <- data.frame(event_id=names(fittedALEs),
+                          gene_name=sapply(fittedALEs, "[[", "gene_name"),
+                          nH=sapply(fittedALEs, "[[", "nH"),
+                          ec50=sapply(fittedALEs, "[[", "ec50"),
+                          min=sapply(fittedALEs, "[[", "min"),
+                          max=sapply(fittedALEs, "[[", "max"),
+                          pseudoR2=sapply(fittedALEs, "[[", "pseudoR2"))
+
+summaryALEs %>%
+    arrange(dplyr::desc(pseudoR2)) %>%
+    dplyr::slice(1:5) %>%
+    kable(., "html", align="c", caption="Fitted alternative last exon events") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(height="300px", width = "94%")
+
+summaryIRs <- data.frame(event_id=names(fittedIRs),
+                         gene_name=sapply(fittedIRs, "[[", "gene_name"),
+                         nH=sapply(fittedIRs, "[[", "nH"),
+                         ec50=sapply(fittedIRs, "[[", "ec50"),
+                         min=sapply(fittedIRs, "[[", "min"),
+                         max=sapply(fittedIRs, "[[", "max"),
+                         pseudoR2=sapply(fittedIRs, "[[", "pseudoR2"))
+
+summaryIRs %>%
+    arrange(dplyr::desc(pseudoR2)) %>%
+    dplyr::slice(1:5) %>%
+    kable(., "html", align="c", caption="Fitted intron retention events") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(height="300px", width = "94%")
+```
+
+As a proof of concept the fitted dose-response curve of the 11th exon of
+MST1R/RON is shown, which nicely matches the dose-response curve shown
+in Figure 6b in [Braun et
+al.](https://www.nature.com/articles/s41467-018-05748-7), which was
+based on qRT-PCR measurements.
+
+```{r}
+plotDRC(fittedCEs$ENSG00000164078.14_1_CE_1)
+```
+
+# Filtering by pseudoR2
+
+As mentioned above for each fitted dose-response curve the pseudoR2 was
+computed, which serves as a measure for the goodness-of-fit. Before
+applying a cut-off the pseudo R2 distribution was visualized for the
+fitted CE, ALE and IR events. The later applied cut-off of 0.75 is added
+as a vertical line.
+
+```{r}
+
+# First a data.frame with an event class column and a pseudoR2 column is
+#   created and piped into the ggplot() function to create a facet_wrap
+#   of histograms.
+data.frame(event=factor(c(rep("CE", nrow(summaryCEs)),
+                          rep("ALE", nrow(summaryALEs)),
+                          rep("IR", nrow(summaryIRs))),
+                        levels=c("CE", "ALE", "IR")),
+           pseudoR2=c(summaryCEs$pseudoR2,
+                      summaryALEs$pseudoR2,
+                      summaryIRs$pseudoR2)) %>%
+    ggplot(., aes(x=pseudoR2)) +
+    geom_histogram(binwidth = 0.025, col="black") +
+    facet_wrap(~event, scales="free_y") +
+    geom_vline(xintercept = 0.75, col="red", linetype="dashed") +
+    scale_x_continuous(breaks=seq(0,1,0.25)) +
+    labs(x= "Goodness of fit (pseudoR2)", y="Number of events") +
+    myTheme
+```
+
+Events with a pseudoR2 \< 0.75 are removed to ensure a hih quality of
+fitted events.
+
+```{r}
+
+# Apply the filtering
+filteredFittedCEs <- fittedCEs[fittedCEs %>% sapply(., "[[", "pseudoR2") >= 0.75]
+filteredFittedALEs <- fittedALEs[fittedALEs %>% sapply(., "[[", "pseudoR2") >= 0.75]
+filteredFittedIRs <- fittedIRs[fittedIRs %>% sapply(., "[[", "pseudoR2") >= 0.75]
+```
+
+Here is the the number of events after applying the filtering:
+
+-   CEs: `r length(filteredFittedCEs)`
+-   ALEs: `r length(filteredFittedALEs)`
+-   IRs: `r length(filteredFittedIRs)`
+
+# Categorization by the Hill coefficient
+
+The individual events should be categorized based on their fitted Hill
+coefficient (nH). As a first step, the distribution of Hill coefficients
+was plotted for the three event classes. Coefficients less than -25 or
+greater than 25 were set to -25 and 25, respectively.
+
+```{r}
+
+# For each of the three event classes a Hill coefficient histogram is 
+#   plotted. Coefficients were limited to -25 and 25.
+
+data.frame(nH=sapply(filteredFittedCEs, "[[", "nH")) %>%
+    mutate(nH=ifelse(nH > 25, 25, nH)) %>%
+    mutate(nH=ifelse(nH < -25, -25, nH)) %>%
+    ggplot(aes(x=nH)) +
+    geom_histogram(binwidth = .5, col="black") +
+    coord_cartesian(xlim=c(-25, 25)) +
+    scale_x_continuous(breaks=seq(-25, 25, 5),
+                       labels=c(expression(""<=-25), "-20", "-15", "-10", "-5", "0",
+                                "5", "10", "15", "20", expression("">=25))) +
+    labs(x="Hill coefficient", y="Number of events", title= "CE events") +
+    myTheme
+
+data.frame(nH=sapply(filteredFittedALEs, "[[", "nH")) %>%
+    mutate(nH=ifelse(nH > 25, 25, nH)) %>%
+    mutate(nH=ifelse(nH < -25, -25, nH)) %>%
+    ggplot(aes(x=nH)) +
+    geom_histogram(binwidth = .5, col="black") +
+    coord_cartesian(xlim=c(-25, 25)) +
+    scale_x_continuous(breaks=seq(-25, 25, 5),
+                       labels=c(expression(""<=-25), "-20", "-15", "-10", "-5", "0",
+                                "5", "10", "15", "20", expression("">=25))) +
+    labs(x="Hill coefficient", y="Number of events", title= "ALE events") +
+    myTheme
+
+data.frame(nH=sapply(filteredFittedIRs, "[[", "nH")) %>%
+    mutate(nH=ifelse(nH > 25, 25, nH)) %>%
+    mutate(nH=ifelse(nH < -25, -25, nH)) %>%
+    ggplot(aes(x=nH)) +
+    geom_histogram(binwidth = .5, col="black") +
+    coord_cartesian(xlim=c(-25, 25)) +
+    scale_x_continuous(breaks=seq(-25, 25, 5),
+                       labels=c(expression(""<=-25), "-20", "-15", "-10", "-5", "0",
+                                "5", "10", "15", "20", expression("">=25))) +
+    labs(x="Hill coefficient", y="Number of events", title= "IR events") +
+    myTheme
+```
+
+Each event is assigned to one of four groups based on the fitted Hill
+coefficient. There are two cooperative (Coop) and two non-cooperative
+(nonCoop) groups with one containing enhanced (Enh) and one repressed
+(Rep) events. Enhanced events show more inclusion when HNRNPH levels are
+high, while repressed events show reduced inclusion when HNRNPH levels
+are high.
+
+These are the four groups and the Hill coefficient thresholds:
+
+-   Coop-Enh: nH \<= -2
+-   non-Coop-Enh: -2 \< nH \<0
+-   non-Coop-Rep: 0 \<= nH \< 2
+-   Coop-Rep: 2 \<= nH
+
+```{r}
+
+# Based on the Hill coefficient (nH) events are assigned to one 
+#   of four groups.
+
+filteredFittedCEs <- lapply(filteredFittedCEs, function(m){
+    if(2 <= m$nH){m$hillCat <- "Coop-Rep"}
+    else if(0<= m$nH & m$nH < 2){m$hillCat <- "nonCoop-Rep"}
+    else if(-2 < m$nH & m$nH < 0){m$hillCat <- "nonCoop-Enh"}
+    else{m$hillCat <- "Coop-Enh"}
+    return(m)
+})
+
+filteredFittedALEs <- lapply(filteredFittedALEs, function(m){
+    if(2 <= m$nH){m$hillCat <- "Coop-Rep"}
+    else if(0<= m$nH & m$nH < 2){m$hillCat <- "nonCoop-Rep"}
+    else if(-2 < m$nH & m$nH < 0){m$hillCat <- "nonCoop-Enh"}
+    else{m$hillCat <- "Coop-Enh"}
+    return(m)
+})
+
+filteredFittedIRs <- lapply(filteredFittedIRs, function(m){
+    if(2 <= m$nH){m$hillCat <- "Coop-Rep"}
+    else if(0<= m$nH & m$nH < 2){m$hillCat <- "nonCoop-Rep"}
+    else if(-2 < m$nH & m$nH < 0){m$hillCat <- "nonCoop-Enh"}
+    else{m$hillCat <- "Coop-Enh"}
+    return(m)
+})
+```
+
+In the plot below the number of events assigned to one of the four
+categories is shown for the CE, ALE and IR event class.
+
+```{r}
+
+# Count the number of events per category for each AS event class and combine
+#   the resulting data.frames via rbind(). The resulting data.frame is adjusted
+#   and used as input for ggplot() to plot a facet_wrap of barcharts.
+
+rbind(
+    sapply(filteredFittedCEs, "[[", "hillCat") %>%
+        table(., dnn="hillCat") %>%
+        as.data.frame %>%
+        mutate(event="CE"),
+    sapply(filteredFittedALEs, "[[", "hillCat") %>%
+        table(., dnn="hillCat") %>%
+        as.data.frame %>%
+        mutate(event="ALE"),
+    sapply(filteredFittedIRs, "[[", "hillCat") %>%
+        table(., dnn="hillCat") %>%
+        as.data.frame %>%
+        mutate(event="IR")
+) %>%
+    mutate(event=factor(event, levels = c("CE", "ALE", "IR"))) %>%
+    mutate(hillCat=factor(hillCat, levels=c("Coop-Enh", "Coop-Rep", "nonCoop-Enh", "nonCoop-Rep"))) %>%
+    ggplot(., aes(x=hillCat, y=Freq, fill=hillCat)) +
+    geom_col(col="black") +
+    facet_wrap(~event) +
+    theme_bw() + 
+    scale_fill_manual(values=c("Coop-Enh" = "cornflowerblue", "Coop-Rep" = "salmon2", "nonCoop-Enh" = "#404040", "nonCoop-Rep" = "#404040")) +
+    theme_bw() +
+    labs(x="Hill category", y="Number of events") +
+    myTheme +
+    theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))
+```
+
+For all three types of events, Coop-Rep (cooperatively repressed) is the 
+most covered category, which reflects the repressor function of HNRNPH
+on those events under control conditions.
+
+As a small example the fitting of one CE event per category is shown:
+
+```{r}
+
+# Four events are selected and the plots of their fitted dose-response curves
+#   combined via ggarrange().
+ggarrange(
+    plotDRC(filteredFittedCEs$ENSG00000166908.18_1_CE_1, "cornflowerblue"),
+    plotDRC(filteredFittedCEs$ENSG00000092841.19_2_CE_1, "salmon2"),
+    plotDRC(filteredFittedCEs$ENSG00000112365.5_1_CE_1, "#404040"),
+    plotDRC(filteredFittedCEs$ENSG00000250988.7_2_CE_1, "#404040"),
+    ncol=2, nrow=2
+)
+```
+
+# Validation by qRT-PCR
+
+Kerstin Tretow from the IMB performed qRT-PCR measurements of the four
+events in response to the HNRNPH titration, followed by dose-response
+cuver fitting. For 3 of the 4 events the results were verified. The 
+fourth event could not be measured as the expression of the underlying
+gene was too low.
+
+The PSI measurements for the *PIP4K2C*, *MYL6* and *SNHG21* events are loaded,
+replicate PSIs are averaged and $\Delta$PSIs computed by subtracting the
+matched control PSIs from the knockdown and overexpression PSIs. At the
+end the $\Delta$PSIs are combined with the relative protein concentrations
+into a data.frame for each of the three events.
+
+```{r}
+
+# Load the Excel sheet of each event into a data.frame
+xlsx_path <- paste0(dataDir,"/qRT_PCR_DRC_validation/zusammenfassung_Titrationvalidation_Mario.xlsx")
+qRT_PSIs <- list(PIP4K2C = read_xlsx(xlsx_path, sheet="PIP4K2C"),
+             MYL6 = read_xlsx(xlsx_path, sheet="MYL6"),
+             SNHG21 = read_xlsx(xlsx_path, sheet="SNHG21"))
+
+# dPSIs are computed by first averaging the replicate PSIs, followed by the
+#   computation of dPSIs by subtracting the PSIs of the matched controls
+#   from the knockdown and overexpression PSIs. The control PSIs are at
+#   position 8 and 9 in the PSI column.
+
+qRT_dPSIs <- lapply(qRT_PSIs, function(df){
+  df <- df %>% dplyr::filter(!(Treatment %in% c("10000 nM", "5000 nM") & Replicate == 3))
+  treatmentLevels <- df$Treatment %>% unique
+  df <- df %>%
+    group_by(Treatment) %>%
+    dplyr::summarise(Treatment=unique(Treatment), PSI=mean(PSI)) %>%
+    mutate(Treatment=factor(Treatment, levels=treatmentLevels)) %>%
+    arrange(Treatment)
+  df$dPSI <- NA
+  df$dPSI[1:8] <- df$PSI[1:8] - df$PSI[8]    
+  df$dPSI[9:12] <- df$PSI[9:12] - df$PSI[9]
+  df <- df[-9,]
+  df$proteinConc <- proteinConc
+  return(df)
+})
+```
+
+In the following, for each event the dose-response curve is fitted and
+meta information added to each model. Fitting was done without any
+parameter constraints.
+
+```{r}
+
+# For each of the three events a dose-response curve is fitted and additional
+#   information added to the models
+
+PIP4K2Cmodel <- drm(
+  formula = dPSI ~ proteinConc, data = qRT_dPSIs$PIP4K2C,
+  fct = LL.4(names = c("nH", "min", "max", "ec50")))
+PIP4K2Cmodel$nH <- coef(PIP4K2Cmodel)[1]
+PIP4K2Cmodel$min <- coef(PIP4K2Cmodel)[2]
+PIP4K2Cmodel$max <- coef(PIP4K2Cmodel)[3]
+PIP4K2Cmodel$ec50 <- coef(PIP4K2Cmodel)[4]
+PIP4K2Cmodel$pseudoR2 <- R2nls(PIP4K2Cmodel)$PseudoR2
+PIP4K2Cmodel$name <- "PIP4K2C"
+PIP4K2Cmodel$event_id <- "ENSG00000166908.18_1_CE_1"
+
+
+MYL6model <- drm(
+  formula = dPSI ~ proteinConc, data = qRT_dPSIs$MYL6,
+  fct = LL.4(names = c("nH", "min", "max", "ec50")))
+MYL6model$nH <- coef(MYL6model)[1]
+MYL6model$min <- coef(MYL6model)[2]
+MYL6model$max <- coef(MYL6model)[3]
+MYL6model$ec50 <- coef(MYL6model)[4]
+MYL6model$pseudoR2 <- R2nls(MYL6model)$PseudoR2
+MYL6model$name <- "MYL6"
+MYL6model$event_id <- "ENSG00000092841.19_2_CE_1"
+
+
+SNHG21model <- drm(
+  formula = dPSI ~ proteinConc, data = qRT_dPSIs$SNHG21,
+  fct = LL.4(names = c("nH", "min", "max", "ec50")))
+SNHG21model$nH <- coef(SNHG21model)[1]
+SNHG21model$min <- coef(SNHG21model)[2]
+SNHG21model$max <- coef(SNHG21model)[3]
+SNHG21model$ec50 <- coef(SNHG21model)[4]
+SNHG21model$pseudoR2 <- R2nls(SNHG21model)$PseudoR2
+SNHG21model$name <- "SNHG21"
+SNHG21model$event_id <- "ENSG00000250988.7_2_CE_1"
+```
+
+The fitted dose-response curves using qRT-PCR measurements nicely
+resemble the fitted dose-reponse curves using RNA-seq measurements.
+
+```{r}
+# The plots of their fitted dose-response curves are combined via ggarrange().
+#   The ggarrange() calls within ggarrange() are necessary to align the bottom
+#   plot to the center
+
+ggarrange( 
+    ggarrange(
+        plotDRC(PIP4K2Cmodel, "cornflowerblue"),
+        plotDRC(MYL6model, "salmon2"),
+        ncol=2
+        ),
+    ggarrange(NULL,
+              plotDRC(SNHG21model, "#404040"),
+              NULL,
+              ncol=3
+              ),
+    ncol=1, nrow=2
+)
+```
+
+# Browser shots
+
+As a final step for *PIP4K2C* (Coop-Enh) and *MYL6* (Coop-Rep) browser shots
+are generated showing the merged RNA-seq data of the strongest knockdown
+and the matched control as well as the strongest overexpression and the
+matched control. The original BAM-Files have been subsetted to the genomic
+regions of *PIP4K2C* and *MYL6*, respectively, using *samtools view*.
+
+As selected transcript isoforms should be shown in the annotation track,
+the GENCODE annotation v39 is loaded and subsetted to entries with
+selected transcript identifiers of *PIP4K2C* and *MYL6*.
+
+The coverage on the cassette and flanking exons nicely reflect the
+results of the dose-response cuves, namely an increased coverage
+on the cassette exon of *MYL6* in the strongest knockdown and a 
+reduced coverage on the cassette exon of *PIP4K2C* in thre strongest
+knockdown.
+
+```{r}
+
+# The annotation is loaded from a Gzip-File.
+anno <- rtracklayer::import(paste0(dataDir, "/gencode.v39.annotation.gff3.gz"))
+
+anno <- anno[which(anno$transcript_id %in% c("ENST00000422156.7",
+                                             "ENST00000348108.8",
+                                             "ENST00000293422.9"))]
+# Turn it into a TxDB
+annoTxdb <- makeTxDbFromGRanges(anno)
+```
+
+## PIP4K2C - ENSG00000166908.18_1\_CE_1
+
+```{r}
+
+# Define the junctions that should be shown in the browser shot
+sashimiFilterRanges <- GRanges(seqnames = Rle(c("chr12")),
+                               IRanges(c(57599211+1, 57599438+1, 57599211+1),
+                                       c(57599400-1, 57600324-1, 57600324-1)))
+
+# Alignment tracks are created for the four conditions
+KD_10000_tr <- AlignmentsTrack(paste0(dataDir,
+                                      "/BAM/KD_10000_merged_PIP4K2C.bam"),
+                               name="KD_10000",
+                               fill="cornflowerblue",
+                               coverageOnly=TRUE,
+                               sashimiFilter=sashimiFilterRanges)
+KD_Contr_tr <- AlignmentsTrack(paste0(dataDir,
+                                      "/BAM/KD_Contr_merged_PIP4K2C.bam"),
+                               name="KD_Contr",
+                               fill="cornflowerblue",
+                               coverageOnly=TRUE,
+                               sashimiFilter=sashimiFilterRanges)
+OE_Contr_tr <- AlignmentsTrack(paste0(dataDir,
+                                      "/BAM/OE_Contr_merged_PIP4K2C.bam"),
+                               name="OE_Contr", 
+                               fill="cornflowerblue",
+                               coverageOnly=TRUE,
+                               sashimiFilter=sashimiFilterRanges)
+OE_2500_tr <- AlignmentsTrack(paste0(dataDir,
+                                     "/BAM/OE_02500_merged_PIP4K2C.bam"),
+                              name="OE_02500",
+                              fill="cornflowerblue",
+                              coverageOnly=TRUE,
+                              sashimiFilter=sashimiFilterRanges)
+
+# Also a GeneRegion track is generated
+anno_tr <- GeneRegionTrack(annoTxdb, name = "v39", col="black", fill="black",
+                           col.line="black", rotation.title=0)
+
+# The Browser shot is created for the genomic region where the CE event
+#   is located.
+plotTracks(list(GenomeAxisTrack(col="black", fontcolor="black"),
+                KD_10000_tr, KD_Contr_tr, OE_Contr_tr, OE_2500_tr, anno_tr),
+           from= 57599065 - 50,
+           to=57600437 + 50, # long last exon
+           chromosome = "chr12",
+           type = c("coverage", "sashimi"),
+           fontsize=10,
+           sizes = c(2,3,3,3,3,0.75),
+           sashimiNumbers = TRUE,
+           frame=TRUE,
+           main="PIP4K2C - ENSG00000166908.18_1_CE_1",
+           cex.main=1, 
+           cex.axis=0.75,
+           cex.title=1,
+           col.axis="black",
+           col.sashimi="black",
+           background.title="#f9f9f9",
+           col.border.title="black",
+           fontcolor.title="black",
+           col.frame="black")
+```
+
+## MYL6 - ENSG00000092841.19_2\_CE_1
+
+```{r}
+
+# Define the junctions that should be shown in the browser shot
+sashimiFilterRanges <- GRanges(seqnames = Rle(c("chr12")),
+                               IRanges(c(56160320+1, 56160670+1, 56160320+1),
+                                       c(56160626-1, 56161387-1, 56161387-1)))
+
+# Alignment tracks are created for the four conditions
+KD_10000_tr <- AlignmentsTrack(paste0(dataDir,
+                                      "/BAM/KD_10000_merged_MYL6.bam"),
+                               name="KD_10000",
+                               fill="salmon2",
+                               coverageOnly=TRUE,
+                               sashimiFilter=sashimiFilterRanges)
+KD_Contr_tr <- AlignmentsTrack(paste0(dataDir,
+                                      "/BAM/KD_Contr_merged_MYL6.bam"),
+                               name="KD_Contr",
+                               fill="salmon2",
+                               coverageOnly=TRUE,
+                               sashimiFilter=sashimiFilterRanges)
+OE_Contr_tr <- AlignmentsTrack(paste0(dataDir,
+                                      "/BAM/OE_Contr_merged_MYL6.bam"),
+                               name="OE_Contr",
+                               fill="salmon2",
+                               coverageOnly=TRUE,
+                               sashimiFilter=sashimiFilterRanges)
+OE_2500_tr <- AlignmentsTrack(paste0(dataDir,
+                                     "/BAM/OE_02500_merged_MYL6.bam"),
+                              name="OE_02500",
+                              fill="salmon2",
+                              coverageOnly=TRUE,
+                              sashimiFilter=sashimiFilterRanges)
+
+# The Browser shot is created for the genomic region where the CE event
+#   is located.
+plotTracks(list(GenomeAxisTrack(col="black", fontcolor="black"),
+                KD_10000_tr, KD_Contr_tr, OE_Contr_tr, OE_2500_tr, anno_tr),
+           from= 56160243 - 50,
+           to=56161587 + 50, # long last exon
+           chromosome = "chr12",
+           type = c("coverage", "sashimi"),
+           fontsize=10,
+           sizes = c(2,3,3,3,3,0.75),
+           sashimiNumbers = TRUE,
+           frame=TRUE,
+           main="MYL6 - ENSG00000092841.19_2_CE_1",
+           cex.main=1, 
+           cex.axis=0.75,
+           cex.title=1,
+           col.axis="black",
+           col.sashimi="black",
+           background.title="#f9f9f9",
+           col.border.title="black",
+           fontcolor.title="black",
+           col.frame="black")
+```
+
+# Output
+
+The final sets of fitted CE, ALE and IR events are stored in RDS-Files
+for further analyses.
+
+```{r}
+saveRDS(filteredFittedCEs, paste0(drcDir,"/rds_files/fittedCEs.rds"))
+saveRDS(filteredFittedALEs, paste0(drcDir,"/rds_files/fittedALEs.rds"))
+saveRDS(filteredFittedIRs, paste0(drcDir,"/rds_files/fittedIRs.rds"))
+```
+
+# Session Information
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,611 @@
+---
+title: "Alternative splicing changes in response to HNRNPH titration"
+author:
+- name: Mario Keller
+  affiliation: Faculty of Biological Sciences, Goethe University Frankfurt
+output:
+  BiocStyle::html_document:
+      toc: TRUE
+      toc_float: TRUE
+      code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE,
+                      results = TRUE, crop=NULL)
+```
+
+```{r libraries}
+library(tidyverse)
+library(knitr)
+library(ggpubr)
+library(ggsci)
+library(viridis)
+library(ComplexHeatmap)
+library(circlize)
+```
+
+```{r defineTheme}
+myTheme <- theme_bw() +
+    theme(axis.text = element_text(size = 14, colour="black"),
+          axis.title = element_text(size=16, colour="black"),
+          axis.ticks=element_line(color="black"),
+          axis.ticks.length=unit(.15, "cm"),
+          panel.border=element_rect(color="black", fill = NA),
+          panel.background = element_blank(),
+          plot.background = element_blank(),
+          legend.text = element_text(size=12),
+          legend.position = "none")
+```
+
+```{r paths}
+projectDir <- "/Users/mariokeller/projects/HNRNPH_project/Tretow_et_al_2023"
+
+majiqDir <- paste0(projectDir,"/2_MAJIQ_AS_analysis")
+```
+
+# Background
+
+RNA-seq data of HNRNPH titration experiments was analyzed using the
+MAJIQ framework to detect differentially regulated alternative splicing
+(AS) events. Data included 7 knockdown experiments with a matched
+control as well as 3 overexpression experiments with a matched control.
+*majiq build* in combination with the human GENCODE annotation v39 was
+used to generate the splicegraph and detect so-called local splicing
+varions (LSVs). *majiq deltapsi* was used for PSI and $\Delta$PSI
+quantifications between knockdown and overexpression experiments and
+their matched controls. *voila modulize* was used for the inference of
+binary AS events (e.g. cassette exon and intron retention). The output
+of *voila modulize* served as input for this report.
+
+# Data
+
+The MAJIQ Modulizer output is loaded from a RDS-File, created with
+*MAJIQ_Modulizer_output_to_rds.R*. It is a list containing for each of
+the 14 AS event classes a data.frame.
+
+```{r input}
+MAJIQ_binaryEvents <- readRDS(paste0(majiqDir,"/rds_files/MAJIQ_binaryEvents.rds"))
+```
+
+# Identification of regulated AS events
+
+The identification of regulated AS events is a trade-off between an
+overly strict approach, in which actual regulated events are lost, and
+an overly relaxed approach, which introduces false positives.
+
+The 14 AS event classes harbor for each event either two or four
+junctions (retained introns are treated like junctions). For instance, a
+cassette exon event is made up by two pairs of junctions. One pair
+includes the first inclusion junction (C1_A) and the skipping junction
+(C1_C2) and the second pair the second inclusion junction (C2_A) and the
+skipping junction (C2_C1). Intron retention events on the other hand are
+only made up by one pair of junctions, namely the intron itself
+(C1_C2_intron or C2_C1_intron) and the juntion removing the intron
+(C1_C2_spliced or C2_C1_spliced). Each junction is represented as a row
+in the underlying data.frame of each event class.
+
+The workflow for the identification of regulated AS events is executed
+for each of the 10 pairwise comparisons.
+
+For AS event classes with only one pair of junctions, an events is
+considered as regulated if:
+
+-   Both junctions have P(\|$\Delta$PSI\| $\ge$ 0.02) $\ge$ 0.9.
+
+-   Both junctions have \|$\Delta$PSI\| $\ge$ 0.025.
+
+-   The two junctions have inverse regulation.
+
+-   The lower \|$\Delta$PSI\| must be at least 50% of the higher
+    \|$\Delta$PSI\|.
+
+For AS event classes with two pairs of junctions an events is considered
+as regulated if:
+
+-   For at least one pair of junctions both junctions have
+    P(\|$\Delta$PSI\| $\ge$ 0.02) $\ge$ 0.9.
+
+-   All four junctions have \|$\Delta$PSI\| $\ge$ 0.025.
+
+-   For each pair the two junctions have inverse regulation (except for
+    the multi exon spanning class\*).
+
+-   For each pair the lower \|$\Delta$PSI\| must be at least 50% of the
+    higher \|$\Delta$PSI\|.
+
+\*For the multi exon spanning class the the $\Delta$PSI of the
+proximal junctions is the same as the $\Delta$PSI of the distal
+junctions. Likely a bug as they could have provided the correct
+\|$\Delta$PSI\|.
+
+```{r}
+
+#Contains the prefix of the 10 pairwise comparisons
+comparisons <- c("KD_10000.KD_Contr", "KD_05000.KD_Contr", "KD_01000.KD_Contr",
+                 "KD_00500.KD_Contr", "KD_00250.KD_Contr","KD_00100.KD_Contr",
+                 "KD_00050.KD_Contr", "OE_00600.OE_Contr", "OE_01000.OE_Contr",
+                 "OE_02500.OE_Contr")
+
+# Iterate over each of the 14 event classes
+regulatedEvents <- lapply(names(MAJIQ_binaryEvents), function(eventClass){
+    
+    # Extract the data.frame of the event class from the list
+    eventsClassDf <- MAJIQ_binaryEvents[[eventClass]]
+    
+    # Iterate over each of the 10 pairwise comparisons
+    lapply(comparisons, function(comparison){
+        
+        # Define the columns used for the filtering
+        probCol <- paste0(comparison,"_probability_changing")
+        dpsiCol <- paste0(comparison,"_median_dpsi")
+        
+        # Create a reduced  data.frame
+        df <- eventsClassDf[,c("gene_name", "module_id", "event_id",
+                               "lsv_id", probCol, dpsiCol)]
+        
+        # Store the event_id of the events lacking information for at least one junction
+        notFullyQuantified <- df %>%
+            dplyr::filter(., is.na(get(probCol)) | is.na(get(dpsiCol))) %>%
+            pull(event_id) %>% unique
+        
+        # This block performs a pre-filtering and checks which of the events m
+        #   match the mentioned criterions
+        df <- df %>%
+            dplyr::filter(!event_id %in% notFullyQuantified) %>%
+            dplyr::filter(., !lsv_id == "") %>% 
+            group_by(event_id, lsv_id) %>%
+            summarise(gene_name = unique(gene_name),
+                      module_id = unique(module_id),
+                      regulated= sum(get(probCol) >= 0.9) == 2,
+                      change = sum(abs(get(dpsiCol)) >= 0.025) == 2,
+                      opposite = sum(sign(get(dpsiCol))) == 0,
+                      fraction = sum(abs(get(dpsiCol)/max(abs(get(dpsiCol)))) >= 0.5) == 2) %>%
+        summarise(gene_name=unique(gene_name), module_id=unique(module_id),
+                  regulated = any(regulated),
+                  change=all(change),
+                  opposite=all(opposite),
+                  fraction=all(fraction))
+        
+        # This block filters out events not matching the criterions. As mentioned
+        #   the multi exon spanning events can never meet the "inverse regulation"
+        #   criterion, which is why this criterion is left out for them.  
+        if(eventClass == "multi_exon_spanning"){
+            df <- df %>% dplyr::filter(regulated, change, fraction) %>%
+                dplyr::select(gene_name, module_id, event_id)
+        } else {
+            df <- df %>% dplyr::filter(regulated, change, opposite, fraction) %>%
+                dplyr::select(gene_name, module_id, event_id)
+        }
+        
+        # This block creates for each comparison the final data.frame. The
+        #   nrow(df) == 0 command handles the rare cases where a comparison has 
+        #   no regulated event for a AS event class.
+        if(nrow(df) == 0){
+            df <- data.frame(eventClass=character(), gene_name=character(),
+                             module_id=character(), event_id=character(),
+                             placeholder=logical())
+            colnames(df)[5] <- comparison
+        } else {
+            df$placeholder <- TRUE
+            colnames(df)[4] <- comparison
+            df <- cbind(eventClass = eventClass, df)
+        }
+        
+        return(df)
+    }) %>%
+        purrr::reduce(full_join, by=c("eventClass", "gene_name",
+                                      "module_id", "event_id")) %>%
+        replace(is.na(.), FALSE)
+}) %>% bind_rows()
+
+```
+
+The resulting data.frame provides for each event the event class, the
+name of the underlying gene, the module_id and the event_id. In
+addition, for each comparison a column is added that indicates via
+TRUE/FALSE whether the event is regulated in that comparison.
+
+Shown are the 10 random rows:
+
+```{r}
+set.seed(123)
+regulatedEvents %>%
+    slice_sample(n=10) %>%
+    kable(., "html") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(height="300px", width = "94%")
+```
+
+In the following, I determined for each comparison the number of
+regulated events per AS event class:
+
+```{r}
+regulatedEventFrequencies <- regulatedEvents %>%
+    pivot_longer(cols=ends_with("_Contr"),
+                 names_to="comparison",
+                 values_to="regulated") %>%
+    dplyr::filter(regulated) %>%
+    mutate(comparison = factor(strsplit(comparison, ".", fixed=T) %>%
+                                   sapply(., "[[", 1),
+                               levels=strsplit(comparisons, ".", fixed=T) %>%
+                                   sapply(., "[[", 1))) %>%
+    mutate(eventClass = factor(eventClass)) %>%
+    dplyr::count(eventClass, comparison, name="Frequency", .drop=FALSE)
+
+regulatedEventFrequencies %>%
+          pivot_wider(., names_from=comparison, values_from=Frequency) %>%
+    kable(., "html") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(height="300px", width = "94%")
+
+eventsOfInterest <- c("cassette", "alternative_intron", "multi_exon_spanning",
+                      "alternate_first_exon", "alternate_last_exon",
+                      "alt5prime", "alt3prime", "other")
+
+# Merge less interesting AS event classes into "other"
+regulatedEventFrequencies <- regulatedEventFrequencies %>%
+    add_row(
+        regulatedEventFrequencies %>%
+            group_by(comparison) %>%
+            filter(!eventClass %in% eventsOfInterest) %>%
+            summarise(eventClass="other", Frequency = sum(Frequency)) %>%
+            select(eventClass, comparison, Frequency)) %>%
+    filter(., eventClass %in% eventsOfInterest) %>%
+    mutate(eventClass=factor(eventClass, levels=rev(eventsOfInterest)))
+```
+
+For the generation of a stacked barchart, less interesting AS event classes
+were combined into a single class called "other".
+
+```{r}
+
+# A stacked barchart is created. Stacks are the 8 AS event classes. Total
+#   number of events per stacked bar is shown above each bar
+regulatedEventFrequencies %>%
+    ggplot(., aes(x=comparison, y=Frequency, fill=eventClass)) +
+    geom_col() +
+    labs(x="Comparison", y= "Number of regulated events") +
+    scale_fill_npg() +
+    geom_text(aes(label = stat(y), group = comparison), stat = 'summary',
+              fun = sum, vjust = -.25) +
+    scale_y_continuous(limits=c(0,1350), breaks=seq(0,1400,400)) +
+    myTheme +
+    theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1),
+          legend.position = "right")
+```
+
+It can be readily seen that as the strength of knockdown and
+overexpression increases, the number of regulated alternative splicing
+events also increases. The highest number of regulated events is
+observed for the strongest knockdown with `r regulatedEventFrequencies %>% dplyr::filter(comparison == "KD_10000") %>% dplyr::pull(Frequency) %>% sum`.
+The dominant class of events is the cassette exon class.
+
+
+# Overlap of regulated events between comparisons
+
+The overlap of regulated events between the 10 pairwise comparisons was
+determined by generating a matrix (rows = events, columns = comparisons)
+and encoding regulation with 1 (TRUE) and no regulation with 0 (FALSE).
+The matrix was used to generate a Heatmap showing the overlap.
+
+```{r}
+
+# Extract the TRUE/FALSE columns for the 10 comparisons
+regulationMatrix <- regulatedEvents[,5:14] %>% as.matrix()
+
+#Turn TRUEs into 1s and FALSEs into 0s
+regulationMatrix[regulationMatrix==TRUE] <- 1
+regulationMatrix[regulationMatrix==FALSE] <- 0
+
+# Column names are adjusted according to the used siRNA concentrations (knockdown)
+#   and the amount of expression vector (overexpression)
+colNames <- c("10 nM", "5 nM", "1 nM", "0.5 nM", "0.25 nM", "0.1 nM", "0.05 nM",
+              expression(0.6~mu*g), expression(1~mu*g), expression(2.5~mu*g))
+
+#Set the colors
+myCols = structure(c("white", "black"), names = c("0", "1"))
+
+# Prepare the AS event class information for the row annotation
+class <- regulatedEvents$eventClass
+class[!class %in% eventsOfInterest] <- "other"
+class <- factor(class, levels=rev(eventsOfInterest))
+
+row_ha = rowAnnotation(eventClass = class,
+                       col=list(eventClass=structure(ggsci::pal_npg()(8),
+                                                     names=levels(class))),
+                       show_annotation_name=F)
+
+# A two-color heatmap is created, whereby each rows is an AS event. Rows
+#   are grouped by the AS event class and additionally clustered within each
+#   group.
+set.seed(123)
+Heatmap(regulationMatrix, col=myCols, name="regulated", border=TRUE,
+        cluster_rows = TRUE, cluster_columns = FALSE, cluster_row_slices=FALSE,
+        show_row_dend = FALSE, right_annotation = row_ha, row_split=class, 
+        use_raster = TRUE, raster_quality = 10, raster_by_magick = FALSE,
+        column_labels=colNames, show_heatmap_legend = FALSE,
+        row_title="Regulated alternative splicing events")
+```
+
+# Focus on cassette exon, alternative last exon and intron retention events
+
+After analyzing all AS event classes, our focus was on cassette exon
+(CE), alternative last exon (ALE) and intron retention (IR) events.
+
+We consider events in these classes that meet the following criteria:
+
+-   Quantified in all 10 comparisons (we need $\Delta$PSI values for all
+    of them)
+-   Regulated in one of the two strongest knockdown experiments and/or
+    in the two strongest overexpression experiments
+
+In addition, we needed to define the "inclusion levels" of the events in
+these classes, meaning the inclusion levels of the alternative exon (CE
+events), of the first/proximal alternative last exon (ALE events) and
+the intron (IR events). For thir purpose, we define for each event a
+representative junction, whose PSI and $\Delta$PSI quantifications will
+be used in all upcoming analyses.
+
+For CE events it is either the first (C1_A) or second (C2_A) inclusion
+junction. For each event we choose the one that has the highest
+$\Delta$PSI in the two strongest knockdown and overexpression
+experiments.
+
+For ALE events the representative junction is the proximal junction and
+for IR events the intron itself (C1_C2_intron or C2_C1_intron).
+
+```{r}
+
+# Extract IDs of potential candidates (regulated in at least one of the
+#   two strongest knockdown and overexpression experiments)
+candidateIDsCEs <- regulatedEvents %>%
+    dplyr::filter(eventClass == "cassette") %>%
+    dplyr::filter(KD_10000.KD_Contr | KD_05000.KD_Contr |
+                      OE_01000.OE_Contr | OE_02500.OE_Contr) %>%
+    pull(event_id)
+
+# Take MAJIQ output for all events of the class (4 rows per event)
+regulatedCEs <- MAJIQ_binaryEvents$cassette
+
+# Fetch IDs of events not quantified in all comparisons
+notFullyQuantifiedCEs <- regulatedCEs$event_id[
+    apply(regulatedCEs, 1, function(row){any(is.na(row))})
+    ] %>%
+    unique
+
+# Filter the events, determine the representative junction and keep for each
+#   event only the row of the representative junction. slice(1) is for the case
+#   that both junctions have the maximum dPSI (only the first one is used).
+regulatedCEs <- regulatedCEs %>% 
+    dplyr::filter(!event_id %in% notFullyQuantifiedCEs) %>%
+    dplyr::filter(event_id %in% candidateIDsCEs) %>%
+    dplyr::filter(junction_name %in% c("C1_A", "C2_A")) %>%
+    rowwise %>%
+    mutate(dpsiMax = max(abs(KD_10000.KD_Contr_median_dpsi),
+                         abs(KD_05000.KD_Contr_median_dpsi),
+                         abs(OE_01000.OE_Contr_median_dpsi),
+                         abs(OE_02500.OE_Contr_median_dpsi))) %>%
+    ungroup %>%
+    group_by(event_id) %>%
+    dplyr::filter(dpsiMax == max(dpsiMax)) %>%
+    slice(1) %>%
+    ungroup %>% 
+    arrange(event_id)
+
+################################################################################
+
+# Extract IDs of potential candidates (regulated in at least one of the
+#   two strongest knockdown and overexpression experiments)
+candidateIDsALEs <- regulatedEvents %>%
+    dplyr::filter(eventClass == "alternate_last_exon") %>%
+    dplyr::filter(KD_10000.KD_Contr | KD_05000.KD_Contr |
+                      OE_01000.OE_Contr | OE_02500.OE_Contr) %>%
+    pull(event_id)
+
+# Take MAJIQ output for all events of the class (2 rows per event)
+regulatedALEs <- MAJIQ_binaryEvents$alternate_last_exon
+
+# Fetch IDs of events not quantified in all comparisons
+notFullyQuantifiedALEs <- regulatedALEs$event_id[
+    apply(regulatedALEs, 1, function(row){any(is.na(row))})
+    ] %>% unique
+
+# Filter the events, determine the representative junction and keep for each
+#   event only the row of the representative junction.
+regulatedALEs <- regulatedALEs %>% 
+    dplyr::filter(!event_id %in% notFullyQuantifiedALEs) %>%
+    dplyr::filter(event_id %in% candidateIDsALEs) %>%
+    dplyr::filter(junction_name == "Proximal") %>%
+    rowwise %>%
+    mutate(dpsiMax = max(abs(KD_10000.KD_Contr_median_dpsi),
+                         abs(KD_05000.KD_Contr_median_dpsi),
+                         abs(OE_01000.OE_Contr_median_dpsi),
+                         abs(OE_02500.OE_Contr_median_dpsi))) %>%
+    ungroup %>%
+    group_by(event_id) %>%
+    dplyr::filter(dpsiMax == max(dpsiMax)) %>%
+    ungroup %>% 
+    arrange(event_id)
+
+#################################################################################
+
+# Extract IDs of potential candidates (regulated in at least one of the
+#   two strongest knockdown and overexpression experiments)
+candidateIDsIRs <- regulatedEvents %>%
+    dplyr::filter(eventClass == "alternative_intron") %>%
+    dplyr::filter(KD_10000.KD_Contr | KD_05000.KD_Contr |
+                      OE_01000.OE_Contr | OE_02500.OE_Contr) %>%
+    pull(event_id)
+
+# Take MAJIQ output for all events of the class (2 rows per event)
+regulatedIRs <- MAJIQ_binaryEvents$alternative_intron
+
+# Fetch IDs of events not quantified in all comparisons
+notFullyQuantifiedIRs <- regulatedIRs$event_id[
+    apply(regulatedIRs, 1, function(row){any(is.na(row))})
+    ] %>% unique
+
+# Filter the events, determine the representative junction and keep for each
+#   event only the row of the representative junction.
+regulatedIRs <- regulatedIRs %>% 
+    dplyr::filter(!event_id %in% notFullyQuantifiedIRs) %>%
+    dplyr::filter(event_id %in% candidateIDsIRs) %>%
+    dplyr::filter(junction_name %in% c("C1_C2_intron", "C2_C1_intron")) %>%
+    rowwise %>%
+    mutate(dpsiMax = max(abs(KD_10000.KD_Contr_median_dpsi),
+                         abs(KD_05000.KD_Contr_median_dpsi),
+                         abs(OE_01000.OE_Contr_median_dpsi),
+                         abs(OE_02500.OE_Contr_median_dpsi))) %>%
+    ungroup %>%
+    group_by(event_id) %>%
+    dplyr::filter(dpsiMax == max(dpsiMax)) %>%
+    ungroup %>% 
+    arrange(event_id)
+```
+
+Here are the final set sizes:
+
+-   CE events: `r nrow(regulatedCEs)`
+-   ALE events: `r nrow(regulatedALEs)`
+-   IR events: `r nrow(regulatedIRs)`
+
+## Cassette exons
+
+For the final CE events a $\Delta$PSI Heatmap was generated to visualize 
+the change in exon inclusion levels throughout the HNRNPH titration.
+
+```{r}
+# Fetch the dPSI columns via the column suffix
+dpsiMatrix <- regulatedCEs %>% 
+    select(., ends_with("median_dpsi"))
+
+# Use only the prefix of the column names
+colnames(dpsiMatrix) <- strsplit(colnames(dpsiMatrix), ".", fixed=TRUE) %>%
+    sapply(., "[[", 1)
+
+# Define colors
+myCols <- colorRamp2(c(-0.4, -0.15, 0, 0.15, 0.4), inferno(5))
+
+set.seed(123)
+Heatmap(dpsiMatrix, col = myCols, name = "dPSI")
+```
+
+The majority of cassette exons shows increased inclusion in the stronger
+knockdowns, confirming the hypothesis that HNRNPH acts as a repressor of
+cassette exons.
+
+## Alternative last exons
+
+For the final ALE events a $\Delta$PSI Heatmap was generated to visualize 
+the change in the inclusion level of the proximal alternative last exon
+throughout the HNRNPH titration.
+
+```{r}
+# Fetch the dPSI columns via the column suffix
+dpsiMatrix <- regulatedALEs %>% 
+    select(., ends_with("median_dpsi"))
+
+# Use only the prefix of the column names
+colnames(dpsiMatrix) <- strsplit(colnames(dpsiMatrix), ".", fixed=TRUE) %>%
+    sapply(., "[[", 1)
+
+set.seed(123)
+Heatmap(dpsiMatrix, col = myCols, name = "dPSI")
+```
+
+Similar to the cassette exons, the inclusion of the first alternative
+last exon is increased upon knockdown, indicating that HNRNPH promotes
+the inclusion of the downstream (second) alternative last exon under
+control conditions.
+
+## Retained introns
+
+For the final IR events a $\Delta$PSI Heatmap was generated to visualize 
+the change in the inclusion levels throughout the HNRNPH titration.
+
+```{r}
+
+# Fetch the dPSI columns via the column suffix
+dpsiMatrix <- regulatedIRs %>% 
+    select(., ends_with("median_dpsi"))
+
+# Use only the prefix of the column names
+colnames(dpsiMatrix) <- strsplit(colnames(dpsiMatrix), ".", fixed=TRUE) %>%
+    sapply(., "[[", 1)
+
+set.seed(123)
+Heatmap(dpsiMatrix, col = myCols, name = "dPSI")
+```
+
+Similar to the cassette exons, the inclusion of the retained introns is
+is increased upon knockdown, indicating that HNRNPH is required for
+their removal under control conditions.
+
+# Non-regulated cassette exon events
+
+For upcoming analyses non-regulated CE events had to be identified.
+
+CE events are considered as non-regulated if the |$\Delta$PSI| of all four
+junctions is $\le$ 0.025. In the case of more than one non-regulated CE in 
+an AS module, one was picked randomly. The first inclusion junction (C1_A) 
+served as representative junction.
+
+```{r}
+
+# Filter for junctions that match the criterion and check if all four
+#   junctions of a CE event survived the filtering
+nonRegulatedCEs <- MAJIQ_binaryEvents$cassette %>%
+    dplyr::filter(if_all(ends_with("_median_dpsi"), ~ abs(.) <= 0.025)) %>%
+    dplyr::count(event_id, name="Frequency") %>%
+    dplyr::filter(Frequency==4)
+
+# Add the module_id to the data.frame
+nonRegulatedCEs <- left_join(nonRegulatedCEs,
+                             MAJIQ_binaryEvents$cassette %>%
+                                 dplyr::select(module_id, event_id) %>%
+                                 dplyr::distinct(),
+                             by="event_id")
+
+# Select only one non-regulated CE per AS module
+nonRegulatedCEs <- nonRegulatedCEs %>%
+    group_by(module_id) %>%
+    arrange(event_id) %>%
+    slice(1) %>% 
+    pull(event_id)
+
+# Create the final data.frame by filtering for the IDs of non-regulated CEs and
+#   use the row of the first inclusion junction (C1_A) as representative.
+nonRegulatedCEs <-  MAJIQ_binaryEvents$cassette %>% 
+    dplyr::filter(event_id %in% nonRegulatedCEs) %>%
+    dplyr::filter(junction_name == "C1_A")
+
+```
+
+The final set size of non-regulated CE events is `r nrow(nonRegulatedCEs)`.
+
+# Output
+
+The final sets of regulated CE, ALE and IR events are stored in RDS-Files
+that will be used in other analyses (e.g. DRC fitting). In addition, the
+data.frame with all regulated AS events (the TRUE/FALSE data.frame) and the 
+non-regulated CE events are also stored in RDS-Files.
+
+```{r}
+saveRDS(regulatedCEs, paste0(majiqDir, "/rds_files/regulatedCEs.rds"))
+saveRDS(regulatedALEs, paste0(majiqDir, "/rds_files/regulatedALEs.rds"))
+saveRDS(regulatedIRs, paste0(majiqDir, "/rds_files/regulatedIRs.rds"))
+
+saveRDS(regulatedEvents, paste0(majiqDir, "/rds_files/regulatedEvents.rds"))
+
+saveRDS(nonRegulatedCEs, paste0(majiqDir, "/rds_files/nonregulatedCEs.rds"))
+```
+
+# Session Information
+
+```{r}
+sessionInfo()
+```

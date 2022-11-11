@@ -1,0 +1,196 @@
+---
+title: "Correlation of HNRNPH and PSI levels in BRCA tumor samples"
+author:
+- name: Mario Keller
+  affiliation: Faculty of Biological Sciences, Goethe University Frankfurt
+output:
+    BiocStyle::html_document:
+      toc: TRUE
+      toc_float: TRUE
+      code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE,
+                      crop=NULL, results = TRUE)
+```
+
+```{r libraries}
+library(tidyverse)
+library(DESeq2)
+library(knitr)
+library(ggbeeswarm)
+library(kableExtra)
+```
+
+```{r defineTheme}
+myTheme <- theme_bw() +
+    theme(axis.text = element_text(size = 14, colour="black"),
+          axis.title = element_text(size=16, colour="black"),
+          axis.ticks=element_line(color="black"),
+          axis.ticks.length=unit(.15, "cm"),
+          panel.border=element_rect(color="black", fill = NA),
+          panel.background = element_blank(),
+          plot.background = element_blank(),
+          legend.text = element_text(size=12),
+          legend.position = "none")
+```
+
+```{r paths}
+projectDir <- "/Users/mariokeller/projects/HNRNPH_project/Tretow_et_al_2023"
+
+tcgaDir <- paste0(projectDir, "/8_TCGA_analysis")
+```
+
+# Background
+
+The data so far led to the identification of CE and ALE events showing
+cooperatively enhanced and repressed HNRNPH regulation. As the RNA-seq
+experiments were performed in the human breast cancer cell line MCF7, we
+raised the question whether these events show a similar dependence on
+HNRNPH levels and direction of regulation in the TCGA BRCA cohort. To
+test this, expression of HNRNPH1 and HNRNPH2 and PSI levels of the
+enhanced and repressed CE and ALE events were computed for each BRCA
+tumor sample. In addition, the non-regulated CE events were also checked to
+see if these are also not affected in the BRCA samples.
+
+# Data
+
+Vst-transformed and batch corrected expression values are loaded from a
+RDS-File created with *Calculate_expression_BRCA.R*.
+
+Sample meta information is loaded from a RDS-File created with
+*Calculate_expression_BRCA.R*.
+
+PSI values of junctions of interest are loaded from a RDS-File created
+with *Calculate_PSIs_BRCA.R*.
+
+```{r}
+
+vsdBatchCorrected<- readRDS(paste0(tcgaDir,"/rds_files/BRCA_vsdBatchCorrected.rds"))
+
+metaInformation <- readRDS(paste0(tcgaDir,"/rds_files/BRCA_metaInformation.rds"))
+
+PSIs <- readRDS(paste0(tcgaDir,"/rds_files/BRCA_PSI.rds"))
+```
+
+A data.frame with the expression levels of HNRNPH1 (ENSG00000169045.17)
+and HNRNPH2 (ENSG00000126945.8) is created.
+
+```{r}
+# Each row is a sample and columns are the samplebarcode and HNRNPH1 and HNRNPH2
+#   expression levels
+HNRNPHexpression <- data.frame(geneName=c("HNRNPH1", "HNRNPH2"),
+                               vsdBatchCorrected[match(c("ENSG00000169045.17",
+                                                         "ENSG00000126945.8"),
+                                                       rownames(vsdBatchCorrected)),] %>%
+                                   assay) %>%
+    pivot_longer(., cols=-1, names_to="tcgaSampleBarcode", values_to="vst") %>%
+    mutate(tcgaSampleBarcode=gsub(".", "-", tcgaSampleBarcode, fixed = T)) %>% 
+    pivot_wider(., names_from = geneName, values_from=vst)
+
+# The participant barcode and the sample type are added 
+HNRNPHexpression <- HNRNPHexpression %>% 
+    left_join(., metaInformation %>% dplyr::select(tcga.tcga_barcode,
+                                                   tcga.gdc_cases.submitter_id,
+                                                   tcga.gdc_cases.samples.sample_type),
+              by=c("tcgaSampleBarcode" = "tcga.tcga_barcode")) %>%
+    dplyr::rename(tcgaPatientBarcode = tcga.gdc_cases.submitter_id,
+           sampleType = tcga.gdc_cases.samples.sample_type)
+```
+
+Splicing events are reduced to those of the category "Coop-Enh",
+"Coop-Rep" and "nonReg". Note that Coop-Enh and Coop-Rep comprise CE and
+ALE events.
+
+```{r}
+
+# Remove the quantifications od the HNRNPH1 NMD Isoform and 
+#   use for the non-regulated CE events "nonReg" as Hill category
+PSIs <- PSIs %>% 
+    dplyr::filter(eventType != "HNRNPH1nmdIsoform") %>%
+    dplyr::mutate(hillCat = ifelse(is.na(hillCat), "nonReg", hillCat))
+
+# Filter for the three Hill categories of interest
+PSIs <- PSIs %>% dplyr::filter(hillCat %in% c("Coop-Enh", "Coop-Rep", "nonReg"))
+```
+
+# Correlations of HNRNPH1/2 against Coop-Enh, Coop-Rep and nonReg events.
+
+The PSI values cooperatively enhanced and repressed CE and ALE events as
+well as the non-regulated CE events are correlated with the expression
+of HNRNPH1 and HNRNPH2.
+
+Correlations were performed for an event if at least 10 tumor samples had a
+PSI value for the event. Correlations were considered significant if
+their adjusted P value (BH correction) was $\le$ 0.05. Boxplots are are
+based on significant and non-signififcant correlations. Significance is
+shown by the transparency (alpha) of the points.
+
+```{r}
+
+corRes <- lapply(PSIs$eventID %>% unique, function(tmpEventID){
+    
+    # Combine HNRNPH expression levels and PSI values in a single data.frame
+    df <- inner_join(HNRNPHexpression,
+                         PSIs %>%
+                             dplyr::filter(eventID == tmpEventID) %>%
+                             dplyr::select(tcgaPatientBarcode, tcgaSampleBarcode, sampleType, PSI),
+                     by = c("tcgaSampleBarcode", "tcgaPatientBarcode", "sampleType")) %>%
+        dplyr::filter(sampleType=="Primary Tumor")
+        
+    # If there are less than 10 samples return an empty data.frame
+    if(nrow(df) < 10){
+        return(data.frame())
+    }
+    
+    # Create the output data.frame
+    df <- data.frame(gene=c("HNRNPH1", "HNRNPH2"),
+                     eventID=tmpEventID,
+                     hillCat= PSIs %>% dplyr::filter(eventID == tmpEventID) %>%
+                         pull(hillCat) %>% unique,
+                     r=c(cor.test(df$HNRNPH1,
+                                  df$PSI)$estimate,
+                         cor.test(df$HNRNPH2,
+                                  df$PSI)$estimate),
+                     pval=c(cor.test(df$HNRNPH1,
+                                     df$PSI)$p.value,
+                            cor.test(df$HNRNPH2,
+                                     df$PSI)$p.value))
+    return(df)
+}) %>% bind_rows()
+
+# Do the FDR corecction
+corRes <- corRes %>% mutate(pvalAdj = p.adjust(pval, method = "BH")) %>%
+    mutate(sign=ifelse(pvalAdj <= 0.05, TRUE, FALSE))
+
+corRes$hillCat <- factor(corRes$hillCat, levels=c("Coop-Enh","nonReg", "Coop-Rep"))
+
+ggplot(mapping=aes(x=gene, y=r, col=hillCat, fill=hillCat, alpha=sign)) +
+        geom_quasirandom(data=corRes %>% dplyr::filter(sign), dodge.width = .8, size=1.25) +
+        geom_quasirandom(data=corRes %>% dplyr::filter(!sign), dodge.width = .8, size=1.25) +
+        geom_boxplot(data=corRes, alpha=.5, outlier.size = -1, col="black",
+                     position = position_dodge(width = .8), width = .7) +
+        scale_fill_manual(values=c("Coop-Enh"="cornflowerblue", "Coop-Rep"="salmon2", "nonReg"="#606060")) +
+        scale_color_manual(values=c("Coop-Enh"="cornflowerblue", "Coop-Rep"="salmon2", "nonReg"="#606060")) +
+        scale_alpha_manual(values=c("TRUE" = 1, "FALSE" = .2)) +
+        coord_cartesian(ylim=c(-1, 1)) +
+        scale_y_continuous(breaks=seq(-1, 1, by=0.5)) +
+        labs(x="", y="Correlation coefficnt") +
+        myTheme + theme(legend.position = "right", aspect.ratio=1)
+
+```
+
+At least for HNRNPH2 we can see the expected regulation, namely that
+enhanced CE and ALE events are positively correlated with HNRNPH2 levels
+and repressed CE and ALE events negatively. The non-regulated events
+have a median correlation coefficient of around 0.
+
+# Session Information
+
+```{r}
+sessionInfo()
+```

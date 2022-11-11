@@ -1,0 +1,275 @@
+---
+title: "Sequence composition of HNRNPH binding sites"
+author:
+- name: Mario Keller
+  affiliation: Faculty of Biological Sciences, Goethe University Frankfurt
+output:
+    BiocStyle::html_document:
+      toc: TRUE
+      toc_float: TRUE
+      code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE,
+                      results = TRUE, crop=NULL)
+```
+
+```{r libraries}
+library(tidyverse)
+library(knitr)
+library(ggsci)
+library(GenomicRanges)
+library(ggrepel)
+library(Biostrings)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(ggseqlogo)
+```
+
+```{r defineTheme}
+myTheme <- theme_bw() +
+    theme(axis.text = element_text(size = 14, colour="black"),
+          axis.title = element_text(size=16, colour="black"),
+          axis.ticks=element_line(color="black"),
+          axis.ticks.length=unit(.15, "cm"),
+          panel.border=element_rect(color="black", fill = NA),
+          panel.background = element_blank(),
+          plot.background = element_blank(),
+          legend.text = element_text(size=12),
+          legend.position = "none")
+```
+
+```{r paths}
+projectDir <- "/Users/mariokeller/projects/HNRNPH_project/Tretow_et_al_2023"
+
+iClipDir <- paste0(projectDir, "/4_iCLIP_analysis")
+```
+
+# Background
+
+The sequence composition around binding sites can provide insights into
+the binding preferences (e.g. motifs or secondary structures) of the RBP
+of interest. For this purpose,a logo plot was prepared using windows
+around all binding sites to see if certain nucleotides or stretches of
+nucleotides are enriched around the binding site centers. In addition, a
+tetramer analysis was performed between sets of strong and weak binding
+sites as well as between binding sites located in cooperatively
+regulated CE events and non-regulated CE events.
+
+# Data
+
+HNRNPH binding sites are loaded from a RDS-File created with
+*Binding_site_definition.R*.
+
+Regulated and non-regulated CE minigenes are loaded from RDS-Files
+created with *Create_CE_minigenes.R*.
+
+```{r}
+bindingSites <- readRDS(paste0(iClipDir,
+                               "/rds_files/HNRNPH_binding_sites.rds"))
+
+regulatedMiniGenes <- readRDS(paste0(iClipDir, "/rds_files/regulatedMiniGenes.rds"))
+nonRegulatedMiniGenes <- readRDS(paste0(iClipDir, "/rds_files/nonregulatedMiniGenes.rds"))
+
+```
+
+Accord to their PureCLIP score, binding sites were labeled as "top20%",
+"bottom20%" and "others".
+
+```{r}
+bindingSites$rank <- cut(bindingSites$score,
+                         breaks=quantile(bindingSites$score,
+                                         probs=c(0, 0.2, 0.8, 1.0)),
+                         labels=c("bottom20%", "others", "top20%"),
+                         include.lowest = T)
+```
+
+The regulated and non-regulated CE events are stored as GRanges objects
+with 3 ranges (one for each involved exon). For simplicity evens are
+reduced to the a single range starting at the start of the leftmost exon
+and ending at the end of the rightmost exon. In addition I filtered them
+for cooperatively regulated CE events (Coop-Enh and Coop-Rep).
+
+```{r}
+
+regulatedMiniGenes <- lapply(regulatedMiniGenes, function(gr){
+  event_id <- gr$event_id %>% unique
+  hillCat <- gr$hillCat %>% unique
+  # range() reduces the three ranges into one range
+  gr <- range(gr)
+  gr$event_id <- event_id
+  gr$hillCat <- hillCat
+  return(gr)
+}) %>% as(., "GRangesList") %>% unlist
+regulatedMiniGenes <- regulatedMiniGenes[regulatedMiniGenes$hillCat %in%
+                                             c("Coop-Enh", "Coop-Rep")]
+
+nonRegulatedMiniGenes <- lapply(nonRegulatedMiniGenes, function(gr){
+  event_id <- gr$event_id %>% unique
+  # range() reduces the three ranges into one range
+  gr <- range(gr)
+  gr$event_id <- event_id
+  gr$hillCat <- "nonReg"
+  return(gr)
+}) %>% as(., "GRangesList") %>% unlist
+```
+
+# Logoplot
+
+As a first step a logo plot was prepared using a window of +/-25 nt
+around the center of all `r format(length(bindingSites), big.mark=",")`
+binding sites.
+
+```{r}
+
+allRSS <-RNAStringSet(getSeq(Hsapiens, bindingSites+23))
+
+ggplot() +
+    geom_logo(as.character(allRSS), seq_type="rna", method="bits") + 
+    scale_x_continuous(breaks = seq(1,51,5), labels = seq(-25, 25, 5)) +
+    labs(x="Position relative to binding site center") +
+    myTheme +
+    theme(aspect.ratio = 1/2.5)
+
+```
+
+Around the center there is a clear enrichment of G-stretches as well as 
+uridines, whereby the latter one reflects the typical iCLIP uridine bias.
+In addition, further downstream of the binding site center there is also
+an enrichment of G-stretches.
+
+# Comparative tetramer analysis
+
+## Assignment of binding sites to sets
+
+To check for an enrichment of specific tetramers around strong binding
+sites and binding sites located in cooperatively regulated CE events,
+these were compared to sets of weak binding sites and binding sites
+located in non-regulated CE events, respectively.
+
+Comparison1:
+
+-   top20%: 20% binding sites with highest PureCLIP score
+-   bottom20%: 20% binding sites with lowest PureCLIP score
+
+Comparison2:
+
+-   coop: Binding sites located in cooperatively regulated CE events
+-   nonReg: Binding sites located in non-regulated CE events
+
+```{r}
+
+# Create the four sets
+top20 <- bindingSites[bindingSites$rank == "top20%"] + 23
+bottom20 <- bindingSites[bindingSites$rank == "bottom20%"] + 23
+coop <- subsetByOverlaps(bindingSites, regulatedMiniGenes) + 23 
+nonReg <- subsetByOverlaps(bindingSites, nonRegulatedMiniGenes) + 23
+
+# Organize them in a list
+bindingSiteSets <- list(top20=top20, bottom20=bottom20,
+                        coop=coop, nonReg=nonReg)
+
+rm(top20, bottom20, coop, nonReg)
+```
+
+Here is the number of binding sites in each set.
+
+```{r}
+
+data.frame(set=names(bindingSiteSets),
+           n = lengths(bindingSiteSets)) %>%
+    kable(., "html") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(height="300px", width = "94%")
+
+```
+
+## Tetramer frequencies around the binding sites
+
+First, the RNA sequence of each 51 nt binding site window was
+determined. Next, all possible tetramers were searched in the binding
+site windows of each set. Afterwards, the mean frequency of each
+tetramer in the binding site windows of each set was determined.
+
+```{r}
+
+# Create for each set a RNAStringSet with the sequence of each window
+bindingSiteSetsRSS <- bindingSiteSets %>% lapply(., function(gr){
+    return(RNAStringSet(getSeq(Hsapiens, gr)))
+})
+
+# Count the occurence of each tetramer in every window and calculate the mean.
+#   Combine the results of the four sets in a single data.frame, where
+#   rows are tetramers and columns the mean frequency in each set
+tetramerDf <- bindingSiteSetsRSS %>% lapply(., function(rss){
+    return(oligonucleotideFrequency(rss, 4) %>%
+               colMeans())
+}) %>%
+    do.call("cbind", .) %>%
+    as.data.frame() %>%
+    tibble::rownames_to_column(var="kmer")
+
+# Add information about G-stretches (GG or GGG)
+tetramerDf$Gstretch <- "no"
+tetramerDf$Gstretch[grepl("GG", tetramerDf$kmer)] <- "GG"
+tetramerDf$Gstretch[grepl("GGG", tetramerDf$kmer)] <- "GGG"
+tetramerDf <- tetramerDf %>%
+    mutate(Gstretch=factor(Gstretch, levels=c("no", "GG", "GGG"))) %>%
+    arrange(Gstretch)
+```
+
+## Comparative tetramer plots
+
+Mean tetramer frequencies are shown for the top20% and bottom20% set as
+well as for the coop and nonReg set. Tetramers with G-stretches (GG or
+GGG) are colored. In addition, a label is added to the 12 most abundant
+tetramers.
+
+```{r}
+
+tetramersOfInterest <- tetramerDf %>%
+    mutate(avg = dplyr::select(., 2:5) %>% rowMeans()) %>%
+    arrange(desc(avg)) %>%
+    dplyr::slice(1:12) %>%
+    pull(kmer)
+tetramerDf$lab <- ""
+tetramerDf$lab[match(tetramersOfInterest,
+                     tetramerDf$kmer)] <- tetramersOfInterest
+
+ggplot(tetramerDf, aes(x=bottom20, y=top20, fill=Gstretch)) +
+    geom_point(shape=21, size=5) +
+    geom_abline(slope=1, intercept=0) +
+    geom_label_repel(mapping=aes(x=bottom20, y=top20, label=lab), inherit.aes = FALSE, max.overlaps=Inf, min.segment.length=0) +
+    scale_fill_manual(values = c("no" = "grey", "GG" = "#F49839", "GGG" = "#7F4112")) +
+    coord_cartesian(xlim=c(0, 2), ylim=c(0, 2)) +
+    labs(x="Mean tetramer count (bottom 20)", y="Mean tetramer count (top 20)") +
+    myTheme +
+    theme(aspect.ratio=1/1, legend.position = "right")
+
+ggplot(tetramerDf, aes(x=coop, y=nonReg, fill=Gstretch)) +
+    geom_point(shape=21, size=5) +
+    geom_abline(slope=1, intercept=0) +
+    geom_label_repel(mapping=aes(x=coop, y=nonReg, label=lab), inherit.aes = FALSE, max.overlaps=Inf, min.segment.length=0) +
+    scale_fill_manual(values = c("no" = "grey", "GG" = "#F49839", "GGG" = "#7F4112")) +
+    coord_cartesian(xlim=c(0, 1.25), ylim=c(0, 1.25)) +
+    labs(x="Mean tetramer count (coop)", y="Mean tetramer count (nonReg)") +
+    myTheme +
+    theme(aspect.ratio=1/1, legend.position = "right")
+```
+
+Among the 20% strongest binding sites there is a clear enrichment of 
+tetramers containing G-triplets with GGGG being the most enriched. In
+contrast, there are no big differences for G-triplet containing tetramers
+between binding sites located in cooperatively regulated and non-regulated
+CE events. The latter observation indicates that the actual position
+of the binding sites within the events (e.g. in the alternative exon or
+in the flanking introns) might be different for the two sets.
+
+# Session Information
+
+```{r}
+sessionInfo()
+```
