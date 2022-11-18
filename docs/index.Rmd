@@ -19,7 +19,7 @@ the links below:
 
 # Quality assessment
 
-[Quality_assessment.html](/1_Quality_assessment/Quality_assessment.html)
+[Quality_assessment.html](Quality_assessment.html)
 includes the quality assessment of the knockdown and overexpression
 experiments, including verification of *HNRNPH1*, *HNRNPH2*, *ACTB* and
 *GAPDH* expression levels, PCAs of the knockdown and overexpression
@@ -28,14 +28,14 @@ HNRNPH protein concentrations.
 
 # MAJIQ alternative splicing analysis
 
-[MAJIQ_AS_analysis.html](/2_MAJIQ_AS_analysis/MAJIQ_AS_analysis.html)
+[MAJIQ_AS_analysis.html](MAJIQ_AS_analysis.html)
 provides information about the post-processing of the MAJIQ modulizer
 output, the detection of regulated AS events and the filtering of the
 final sets regulated and non-regulated AS events.
 
 # Dose-response curve fitting
 
-[Dose_response_curve_fitting.html](/3_Dose_response_curve_fitting/Dose_response_curve_fitting.html)
+[Dose_response_curve_fitting.html](Dose_response_curve_fitting.html)
 includes the description of the fitting process, the filtering of
 high-quality fittings, the validation of selected events by qRT-PCR and
 the generation of browser shots for cassette exon events in *MYL6* and
@@ -43,26 +43,26 @@ the generation of browser shots for cassette exon events in *MYL6* and
 
 # iCLIP analysis
 
-[Genomic_location_of_binding_sites.html](/4_iCLIP_analysis/Genomic_location_of_binding_sites.html)
+[Genomic_location_of_binding_sites.html](Genomic_location_of_binding_sites.html)
 provides information about the genomic distribution of HNRNPH binding
 sites, meaning the overlap with genes of different biotypes, features of
 protein-coding genes and genes with regulated AS events.
 
-[Sequence_composition_of_binding_sites.html](/4_iCLIP_analysis/Sequence_composition_of_binding_sites.html)
+[Sequence_composition_of_binding_sites.html](Sequence_composition_of_binding_sites.html)
 includes the generation of a logoplot based on all binding sites as well as
 the comparative tetramer analysis between strong and weak binding sites as 
 well as between binding sites located in cooperatively regulated cassette
 exon events and control (non-regulated) cassette exon events.
 
-[RNAmaps_of_regulated_events.html](/4_iCLIP_analysis/RNAmaps_of_regulated_events.html)
+[RNAmaps_of_regulated_events.html](RNAmaps_of_regulated_events.html)
 provides information about the generation of HNRNPH RNA splicing maps on
 cooperatively regulated cassette exon events, including the selection of
 control cassette exon events, normalization and statistical analysis.
 
 # RNA G-quadruplex (rG4) analysis
-[Dependence_of_binding_and_cooperativity_on_rG4s.html](/5_rG4_analysis/Dependence_of_binding_and_cooperativity_on_rG4s.html)
+[Dependence_of_binding_and_cooperativity_on_rG4s.html](Dependence_of_binding_and_cooperativity_on_rG4s.html)
 
 # TCGA analysis
-[Correlation_HNRNPH_levels_and_splicing_events.html](/8_TCGA_analysis/Correlation_HNRNPH_levels_and_splicing_events.html) 
+[Correlation_HNRNPH_levels_and_splicing_events.html](Correlation_HNRNPH_levels_and_splicing_events.html) 
 
-[Clustering_BRCA_samples.html](/8_TCGA_analysis/Clustering_BRCA_samples.html)
+[Clustering_BRCA_samples.html](Clustering_BRCA_samples.html)
