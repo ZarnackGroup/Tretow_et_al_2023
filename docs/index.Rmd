@@ -19,19 +19,19 @@ the links below:
 
 # Quality assessment
 
-[Quality_assessment.html](Quality_assessment.html)
-includes the quality assessment of the knockdown and overexpression
-experiments, including verification of *HNRNPH1*, *HNRNPH2*, *ACTB* and
-*GAPDH* expression levels, PCAs of the knockdown and overexpression
-experiments and the correlation of *HNRNPH1* expression levels and
-HNRNPH protein concentrations.
+[Quality_assessment.html](Quality_assessment.html) includes the quality
+assessment of the knockdown and overexpression experiments, including
+verification of *HNRNPH1*, *HNRNPH2*, *ACTB* and *GAPDH* expression
+levels, PCAs of the knockdown and overexpression experiments and the
+correlation of *HNRNPH1* expression levels and HNRNPH protein
+concentrations.
 
 # MAJIQ alternative splicing analysis
 
-[MAJIQ_AS_analysis.html](MAJIQ_AS_analysis.html)
-provides information about the post-processing of the MAJIQ modulizer
-output, the detection of regulated AS events and the filtering of the
-final sets regulated and non-regulated AS events.
+[MAJIQ_AS_analysis.html](MAJIQ_AS_analysis.html) provides information
+about the post-processing of the MAJIQ modulizer output, the detection
+of regulated AS events and the filtering of the final sets regulated and
+non-regulated AS events.
 
 # Dose-response curve fitting
 
@@ -49,20 +49,37 @@ sites, meaning the overlap with genes of different biotypes, features of
 protein-coding genes and genes with regulated AS events.
 
 [Sequence_composition_of_binding_sites.html](Sequence_composition_of_binding_sites.html)
-includes the generation of a logoplot based on all binding sites as well as
-the comparative tetramer analysis between strong and weak binding sites as 
-well as between binding sites located in cooperatively regulated cassette
-exon events and control (non-regulated) cassette exon events.
+includes the generation of a logoplot based on all binding sites as well
+as the comparative tetramer analysis between strong and weak binding
+sites as well as between binding sites located in cooperatively
+regulated cassette exon events and control (non-regulated) cassette exon
+events.
 
 [RNAmaps_of_regulated_events.html](RNAmaps_of_regulated_events.html)
 provides information about the generation of HNRNPH RNA splicing maps on
 cooperatively regulated cassette exon events, including the selection of
 control cassette exon events, normalization and statistical analysis.
 
-# RNA G-quadruplex (rG4) analysis
+# RNA G-quadruplex analysis
+
 [Dependence_of_binding_and_cooperativity_on_rG4s.html](Dependence_of_binding_and_cooperativity_on_rG4s.html)
+elucidates the relationship between predicted rG4s and binding strength or
+the degree of cooperative regulation.
+
+# RTstop profiling
+
+# ivCLIP
 
 # TCGA analysis
-[Correlation_HNRNPH_levels_and_splicing_events.html](Correlation_HNRNPH_levels_and_splicing_events.html) 
 
-[Clustering_BRCA_samples.html](Clustering_BRCA_samples.html)
+[Correlation_HNRNPH_levels_and_splicing_events.html](Correlation_HNRNPH_levels_and_splicing_events.html)
+explores the correlation of *HNRNPH1*/*HNRNPH2* expression and the PSI
+levels of cooperetively enhanced, repressed and control events in tumor
+samples of the BRCA cohort.
+
+[Clustering_BRCA_samples.html](Clustering_BRCA_samples.html) provides
+information required for the the generation of the Heatmap reflecting a
+distinct regulation of cooperatively regulated events between normal and
+tumor samples as well as for samples of the Basal subtype. In addition,
+row and column annotations are summarized in individual plots and the
+quality of the clustering verified by the calculation of Rand Indices.
