@@ -53,8 +53,8 @@ are a valuable tool. By opening windows at fixed positions in the CE
 events (the four involved splice sites), the iCLIP signal of CE events
 can be combined to produce a single signal that shows the binding
 prefernece of HNRNPH in the defined windows. The addition of signal from
-non-regulated CE events can be added to identify regions with enriched
-HNRNPH binding.
+control (non-regulated) CE events can be added to identify regions with
+enriched HNRNPH binding.
 
 # Data
 
@@ -95,7 +95,7 @@ Here is the total number of events per hill category:
     `r regulatedMiniGenes %>% sapply(., function(gr){gr$hillCat[1]}) %>% table %>% .[1]`
 -   Coop-Rep:
     `r regulatedMiniGenes %>% sapply(., function(gr){gr$hillCat[1]}) %>% table %>% .[2]`
--   non: `r length(nonRegulatedMiniGenes)`
+-   nonReg: `r length(nonRegulatedMiniGenes)`
 
 # Length distribution of exons
 
@@ -144,7 +144,7 @@ rm(widthColumn, exonColumn, hillColumn)
 ```
 
 The flanking exons (C1 and C2) show no length differences between 
-the cooperatively enhanced and repressed Ce event In contrast, the
+the cooperatively enhanced and repressed CE events. In contrast, the
 cassette/alternative exon (A) itself tends to be longer if the
 exon is repressed by HNRNPH.
 
@@ -159,8 +159,8 @@ roughly mirror the control PSI distribution of the enhanced and
 repressed CE events.
 
 To demonstrate the differences in the PSI distributions, I extract the
-knockdown and overexpression PSI estimates for the cooperatively
-enhanced, repressed and non-regulated CE events, average them and plot
+knockdown and overexpression PSI estimates of the cooperatively
+enhanced, repressed and non-regulated CE eventss, average them and plot
 the distributions.
 
 ```{r}

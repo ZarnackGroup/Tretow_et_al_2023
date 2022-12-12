@@ -52,12 +52,12 @@ iClipDir <- paste0(projectDir, "/4_iCLIP_analysis")
 
 The sequence composition around binding sites can provide insights into
 the binding preferences (e.g. motifs or secondary structures) of the RBP
-of interest. For this purpose,a logo plot was prepared using windows
+of interest. For this purpose, a logo plot was prepared using windows
 around all binding sites to see if certain nucleotides or stretches of
 nucleotides are enriched around the binding site centers. In addition, a
 tetramer analysis was performed between sets of strong and weak binding
 sites as well as between binding sites located in cooperatively
-regulated CE events and non-regulated CE events.
+regulated CE events and control (non-regulated) CE events.
 
 # Data
 
@@ -76,7 +76,7 @@ nonRegulatedMiniGenes <- readRDS(paste0(iClipDir, "/rds_files/nonregulatedMiniGe
 
 ```
 
-Accord to their PureCLIP score, binding sites were labeled as "top20%",
+Based on their PureCLIP score, binding sites were labeled as "top20%",
 "bottom20%" and "others".
 
 ```{r}

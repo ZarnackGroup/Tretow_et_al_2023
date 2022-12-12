@@ -53,7 +53,7 @@ dataDir <- paste0(projectDir, "/data")
 
 # Background
 
-Based on the MAJIQ quantification, dose-response curves should be 
+Based on the MAJIQ quantifications, dose-response curves should be 
 fitted for each CE, ALE and IR event identified as regulated in
 *MAJIQ_AS_analysis.Rmd*. The purpose of the fitting is to identify
 coopreatively regulated events based on the fitted Hill coefficient
@@ -131,7 +131,7 @@ For each event a LL.4() is fitted using the formula dPSI\~proteinConc.
 In addition, lower and upper boundaries were set for the parameters to
 be fitted:
 
--   nH (the Hill coefficient): -Inf to +Inf (non constraints)
+-   nH (the Hill coefficient): -Inf to +Inf (no constraints)
 -   ec50: 0 to +Inf (concentration can not be negative)
 -   min: -max(ContrPSI)\* to 0
 -   max: 0 to 1-min(ContrPSI)\*
@@ -139,8 +139,8 @@ be fitted:
 \* ContrPSI is a numeric vector of length 2 containing the PSI value of
 the knockdown and overexpression control for the fitted event
 
-The output is a drc model object to which I add some meta information
-like the event identifier, the name of the underlying gene as well as a
+The output is a drc model object to which meta information is added, namely
+the event identifier, the name of the underlying gene as well as a
 goodness-of-fit metric called pseudoR2, which is later used for the
 removal of bad fittings.
 
@@ -312,7 +312,7 @@ plotDRC(fittedCEs$ENSG00000164078.14_1_CE_1)
 
 As mentioned above for each fitted dose-response curve the pseudoR2 was
 computed, which serves as a measure for the goodness-of-fit. Before
-applying a cut-off the pseudo R2 distribution was visualized for the
+applying a cut-off, the pseudo R2 distribution was visualized for the
 fitted CE, ALE and IR events. The later applied cut-off of 0.75 is added
 as a vertical line.
 
@@ -337,7 +337,7 @@ data.frame(event=factor(c(rep("CE", nrow(summaryCEs)),
     myTheme
 ```
 
-Events with a pseudoR2 \< 0.75 are removed to ensure a hih quality of
+Events with a pseudoR2 \< 0.75 are removed to ensure a high quality of
 fitted events.
 
 ```{r}
@@ -419,7 +419,7 @@ These are the four groups and the Hill coefficient thresholds:
 
 ```{r}
 
-# Based on the Hill coefficient (nH) events are assigned to one 
+# Based on the Hill coefficient (nH), events are assigned to one 
 #   of four groups.
 
 filteredFittedCEs <- lapply(filteredFittedCEs, function(m){

@@ -23,7 +23,6 @@ library(tidyverse)
 library(ComplexHeatmap)
 library(circlize)
 library(RColorBrewer)
-#library(egg)
 library(DESeq2)
 library(knitr)
 library(ggbeeswarm)
@@ -31,7 +30,7 @@ library(kableExtra)
 library(missMDA)
 library(matrixStats)
 library(TCGAbiolinks)
-#library(ggpubr)
+
 ```
 
 ```{r defineTheme}
@@ -192,9 +191,9 @@ Column (samples):
 -   The Inclusion levels of the HNRNPH1 NMD isoform (high = functional,
     low = NMD)
 
--   HNRNPH1 expression levels
+-   *HNRNPH1* expression levels
 
--   HNRNPH2 expression levels
+-   *HNRNPH2* expression levels
 
 -   Sample type (Primary Tumor and Solid Tissue Normal)
 
@@ -204,7 +203,7 @@ Row (events):
 
 -   Hill category (Coop-Enh and Coop-Rep)
 
--   dPSI in the strongest knockdown (10 nM)
+-   $\Delta$PSI in the strongest knockdown (10 nM)
 
 ```{r}
 
@@ -415,7 +414,7 @@ lapply(1:nrow(matZscore), function(i){
     myTheme + theme(aspect.ratio = 1)
 ```
 
-## Quality of clustering
+# Quality of clustering
 
 From the Heatmap it became clear that the cooperatively regulated CE and
 ALE events have the potential to separater normal from tumor samples as
@@ -423,14 +422,14 @@ well as to separate the Basal subtype samples from the other samples.
 
 One way to quantify the separation capability is the adjusted Rand
 index, which was designed to compare two classifications. The adjusted
-Rand index was compute once for the separation of normal from tumor\
+Rand index was compute once for the separation of normal from tumor
 samples and once for the separation of the Basal subtype samples from
-the other samples. To test \
-whether the cooperatively regulated events lead to a better separation
-than a set of random splicing events, 100 sets of randomly picked
-non-regulated CE events with a similar set size were used for clustering
-and calculation of the two adjusted Rand indices. The calculation was
-done in the Rscript called *Calculate_adjusted_Rand_Indices.R*
+the other samples. To test whether the cooperatively regulated events
+lead to a better separation than a set of random splicing events, 100
+sets of randomly picked non-regulated CE events with a similar set size
+were used for clustering and calculation of the two adjusted Rand indices.
+The calculation was done in the Rscript called
+*Calculate_adjusted_Rand_Indices.R*
 
 The following procedure was followed for the set of cooperatively
 regulated CE and ALE events and the 100 random sets of non-regulated CE
@@ -470,7 +469,7 @@ events.
     3.  Change the PAM50 subtype of samples other than Basal to "Other"
 
     4.  Calculate the adjusted Rand Index by using the PAM50 subtype
-        (Basak and Other) as first class label and the new cluster
+        (Basal and Other) as first class label and the new cluster
         labels (C_Basaland C_Other) as second class label
 
 An adjusted Rand index of 0 means random partition, while a value of 1

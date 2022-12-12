@@ -153,13 +153,21 @@ For each of the four groups the PureCLIP score distribution was
 examined.
 
 ```{r}
-bindingSitesRSS <- RNAStringSet(getSeq(Hsapiens, bindingSites))
-bindingSites$group <- "-/-"
-bindingSites$group[vmatchPattern("GGG", bindingSitesRSS) %>% lengths > 0] <- "+/-"
 
+# Get the sequence of the binding sites
+bindingSitesRSS <- RNAStringSet(getSeq(Hsapiens, bindingSites))
+
+# Initialize the group information
+bindingSites$group <- "-/-"
+
+# Adjust the group based on the the presence of 3 Gs and overlap with a
+#   predicted rG4
+bindingSites$group[vmatchPattern("GGG", bindingSitesRSS) %>% lengths > 0] <- "+/-"
 bindingSites$group[countOverlaps(bindingSites, bindingSitesG4s) > 0 & bindingSites$group == "+/-"] <- "+/+"
 bindingSites$group[countOverlaps(bindingSites, bindingSitesG4s) > 0 & bindingSites$group == "-/-"] <- "-/+"
 
+# The four PureCLIP score distributions are shown as a combination
+#   of beeswarm plot and boxplot
 data.frame(group=bindingSites$group, score=bindingSites$score) %>%
     mutate(group=factor(group, levels=c("-/-", "-/+", "+/-", "+/+"))) %>%
     ggplot(., aes(x=group, y=log2(score), col=group, fill=group))+

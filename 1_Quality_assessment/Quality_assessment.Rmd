@@ -56,7 +56,7 @@ overexpression experiments.
 In addition, PCAs of the knockdown and overexpression experiments are
 performed to obtain an overview about individual replicates.
 
-In a final step, *HNRNPH* transcript and HNRNPH protein levels are 
+In a final step, *HNRNPH1* transcript and HNRNPH protein levels are 
 correlated to check if both show similar effects in the
 knockdown and overexpression experiments.
 

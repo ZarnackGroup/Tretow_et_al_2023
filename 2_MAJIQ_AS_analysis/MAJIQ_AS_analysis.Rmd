@@ -183,7 +183,7 @@ regulatedEvents <- lapply(names(MAJIQ_binaryEvents), function(eventClass){
         
         # This block creates for each comparison the final data.frame. The
         #   nrow(df) == 0 command handles the rare cases where a comparison has 
-        #   no regulated event for a AS event class.
+        #   no regulated event for an AS event class.
         if(nrow(df) == 0){
             df <- data.frame(eventClass=character(), gene_name=character(),
                              module_id=character(), event_id=character(),
@@ -547,7 +547,8 @@ their removal under control conditions.
 
 # Non-regulated cassette exon events
 
-For upcoming analyses non-regulated CE events had to be identified.
+For upcoming analyses control (non-regulated) CE events had to be
+identified.
 
 CE events are considered as non-regulated if the |$\Delta$PSI| of all four
 junctions is $\le$ 0.025. In the case of more than one non-regulated CE in 

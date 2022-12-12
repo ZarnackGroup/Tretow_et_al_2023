@@ -10,7 +10,7 @@
 
 
 
-<meta name="date" content="2022-11-11" />
+<meta name="date" content="2022-12-12" />
 
 <title>Alternative splicing changes in response to HNRNPH titration</title>
 
@@ -2168,7 +2168,7 @@ function toggle_visibility(id1) {
 <h1 class="title toc-ignore">Alternative splicing changes in response to HNRNPH titration</h1>
 <p class="author-name">Mario Keller<span class="affil-mark">1</span></p>
 <p class="author-affiliation"><span class="affil-mark">1</span>Faculty of Biological Sciences, Goethe University Frankfurt</p>
-<h4 class="date">11 November 2022</h4>
+<h4 class="date">12 December 2022</h4>
 
 </div>
 
@@ -2314,7 +2314,7 @@ regulatedEvents &lt;- lapply(names(MAJIQ_binaryEvents), function(eventClass){
         
         # This block creates for each comparison the final data.frame. The
         #   nrow(df) == 0 command handles the rare cases where a comparison has 
-        #   no regulated event for a AS event class.
+        #   no regulated event for an AS event class.
         if(nrow(df) == 0){
             df &lt;- data.frame(eventClass=character(), gene_name=character(),
                              module_id=character(), event_id=character(),
@@ -3665,7 +3665,8 @@ their removal under control conditions.</p>
 </div>
 <div id="non-regulated-cassette-exon-events" class="section level1" number="6">
 <h1><span class="header-section-number">6</span> Non-regulated cassette exon events</h1>
-<p>For upcoming analyses non-regulated CE events had to be identified.</p>
+<p>For upcoming analyses control (non-regulated) CE events had to be
+identified.</p>
 <p>CE events are considered as non-regulated if the |<span class="math inline">\(\Delta\)</span>PSI| of all four
 junctions is <span class="math inline">\(\le\)</span> 0.025. In the case of more than one non-regulated CE in
 an AS module, one was picked randomly. The first inclusion junction (C1_A)

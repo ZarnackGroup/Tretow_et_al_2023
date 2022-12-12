@@ -209,7 +209,7 @@ geneOverlaps$biotype <- genes$gene_type[geneOverlaps$genes]
 
 
 # Group overlaps by binding site and assign based on the overlapping genes
-#   exactly one biotype to the binding site
+#   exactly one biotype to each binding site
 biotypeOverview <- geneOverlaps %>%
     group_by(bindingSites) %>%
     summarize(bindingSites = bindingSites[1],
@@ -347,8 +347,8 @@ ggplot() +
 ```
 
 After observing that the fraction of bound genes is more or less
-stabilized at a TPM cut-off of 1. Genes were considered as expressed if
-their averaged TPM value was $\ge$ 1.
+stabilized at a TPM cut-off of 1, genes were considered as expressed if
+their average TPM value was $\ge$ 1.
 
 ```{r}
 
@@ -572,8 +572,8 @@ occurs in the alternatively spliced region. The alternatively spliced region
 of CE events (3 exons involved) was defined as the region starting at the
 leftmost exon and the ending at the rightmost exon.
 
-For the cooperatively enhanced (Coop-Enh), repressed (Coop-Rep) and non-
-regulated events (nonReg) we determined if they are bound (plot1) and 
+For the cooperatively enhanced (Coop-Enh), repressed (Coop-Rep) and control
+(non-regulated) events (nonReg) we determined if they are bound (plot1) and 
 also how many binding sites are located in their region (plot2).
 
 ```{r}
