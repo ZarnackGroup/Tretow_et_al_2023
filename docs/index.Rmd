@@ -12,7 +12,7 @@ editor_options:
     wrap: 72
 ---
 
-This GitHub Pages website provides the rendered HTML-Reports comprising
+This GitHub Page provides the rendered HTML-Reports comprising
 the figures and results of Tretow et al. 2023 published in XXX. The
 HTML-Reports are split into 8 analysis sections and can be accessed via
 the links below:
