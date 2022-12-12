@@ -52,7 +52,7 @@ cooperatively enhanced and repressed HNRNPH regulation. As the RNA-seq
 experiments were performed in the human breast cancer cell line MCF7, we
 raised the question whether these events show a similar dependence on
 HNRNPH levels and direction of regulation in the TCGA BRCA cohort. To
-test this, expression of HNRNPH1 and HNRNPH2 and PSI levels of the
+test this, expression of *HNRNPH1* and *HNRNPH2* and PSI levels of the
 enhanced and repressed CE and ALE events were computed for each BRCA
 tumor sample. In addition, the non-regulated CE events were also checked to
 see if these are also not affected in the BRCA samples.
@@ -77,8 +77,8 @@ metaInformation <- readRDS(paste0(tcgaDir,"/rds_files/BRCA_metaInformation.rds")
 PSIs <- readRDS(paste0(tcgaDir,"/rds_files/BRCA_PSI.rds"))
 ```
 
-A data.frame with the expression levels of HNRNPH1 (ENSG00000169045.17)
-and HNRNPH2 (ENSG00000126945.8) is created.
+A data.frame with the expression levels of *HNRNPH1* (ENSG00000169045.17)
+and *HNRNPH2* (ENSG00000126945.8) is created.
 
 ```{r}
 # Each row is a sample and columns are the samplebarcode and HNRNPH1 and HNRNPH2
@@ -118,11 +118,11 @@ PSIs <- PSIs %>%
 PSIs <- PSIs %>% dplyr::filter(hillCat %in% c("Coop-Enh", "Coop-Rep", "nonReg"))
 ```
 
-# Correlations of HNRNPH1/2 against Coop-Enh, Coop-Rep and nonReg events.
+# Correlations between *HNRNPH1/2* and Coop-Enh, Coop-Rep or nonReg events
 
 The PSI values cooperatively enhanced and repressed CE and ALE events as
 well as the non-regulated CE events are correlated with the expression
-of HNRNPH1 and HNRNPH2.
+of *HNRNPH1* and *HNRNPH2*.
 
 Correlations were performed for an event if at least 10 tumor samples had a
 PSI value for the event. Correlations were considered significant if
@@ -184,8 +184,8 @@ ggplot(mapping=aes(x=gene, y=r, col=hillCat, fill=hillCat, alpha=sign)) +
 
 ```
 
-At least for HNRNPH2 we can see the expected regulation, namely that
-enhanced CE and ALE events are positively correlated with HNRNPH2 levels
+At least for *HNRNPH2* we can see the expected regulation, namely that
+enhanced CE and ALE events are positively correlated with *HNRNPH2* levels
 and repressed CE and ALE events negatively. The non-regulated events
 have a median correlation coefficient of around 0.
 
