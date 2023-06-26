@@ -122,25 +122,47 @@ PSIs <- PSIs %>%
 PSIs <- PSIs %>% dplyr::filter(hillCat %in% c("Coop-Enh", "Coop-Rep", "nonReg"))
 ```
 
-## Correlation HNRNPH1 and HNRNPH2
+# HNRNPH1 and HNRNPH2 levels in normal and tumor samples
 
-At first, the correlation of HNRNPH1 and HNRNPH2 levels was checked.
+To check if there is a difference in HNRNPH1/2 levels between normal and tumor
+samples, I plot the respective expression levels for the 108 patients with
+available normal and tumor quantifications.
+
+```{r}
+HNRNPHexpression %>% group_by(tcgaPatientBarcode) %>% filter(n() ==2) %>% ungroup %>% arrange(tcgaPatientBarcode, sampleType) %>%
+    pivot_longer(., cols=c("HNRNPH1", "HNRNPH2"), names_to="gene", values_to="vst") %>%
+    mutate(., sampleType = factor(sampleType, levels=c("Solid Tissue Normal", "Primary Tumor"), labels = c("Normal", "Tumor"))) %>%
+    ggplot(., aes(x=sampleType, y=vst, fill=sampleType)) +
+    geom_boxplot(width=.2, alpha=1, position = position_nudge(x = c(-.15, .15)), outlier.size = -1) +
+    geom_point(pch=21, size=3, alpha=0.5) +
+    geom_path(mapping=aes(group=tcgaPatientBarcode), size=1, alpha=0.5) +
+    scale_y_continuous(breaks=1:15) +
+    labs(x = "Sample type", y="Expression (vst)") +
+    stat_compare_means(paired=TRUE) +
+    facet_wrap(~gene, ncol=2, scales = "free_y") +
+    myTheme +
+    theme(aspect.ratio = 2/1)
+```
+
+# Correlation HNRNPH1 and HNRNPH2
+
+Next, the correlation of HNRNPH1 and HNRNPH2 levels was checked for tumor samples.
 
 ```{r}
 
-ggplot(HNRNPHexpression, aes(x=HNRNPH1, y=HNRNPH2)) +
+ggplot(HNRNPHexpression %>% dplyr::filter(sampleType == "Primary Tumor"), aes(x=HNRNPH1, y=HNRNPH2)) +
     rasterise(geom_pointdensity(size=3), dpi=300) +
     geom_smooth(method="lm", se=FALSE) +
     scale_x_continuous(breaks=1:16) +
     scale_y_continuous(breaks=1:16) +
     scale_color_viridis() +
     stat_cor() +
-    labs(x="HNRNPH1 expression (vst)", y="HNRNPH2 expression (vst)", title="BRCA") +
+    labs(x="HNRNPH1 expression (vst)", y="HNRNPH2 expression (vst)") +
     myTheme +
     theme(aspect.ratio=1)
 ```
 
-# Correlations between *HNRNPH1/2* and Coop-Enh, Coop-Rep or nonReg events
+# Correlations between *HNRNPH1/2* and Enhanced, Repressed and Ctrl events
 
 The PSI values cooperatively enhanced and repressed CE and ALE events as
 well as the non-regulated CE events are correlated with the expression
@@ -189,15 +211,15 @@ corRes <- lapply(PSIs$eventID %>% unique, function(tmpEventID){
 corRes <- corRes %>% mutate(pvalAdj = p.adjust(pval, method = "BH")) %>%
     mutate(sign=ifelse(pvalAdj <= 0.05, TRUE, FALSE))
 
-corRes$hillCat <- factor(corRes$hillCat, levels=c("Coop-Enh","nonReg", "Coop-Rep"))
+corRes$hillCat <- factor(corRes$hillCat, levels=c("Coop-Enh","nonReg", "Coop-Rep"), labels=c("Enhanced", "Ctrl", "Repressed"))
 
 ggplot(mapping=aes(x=gene, y=r, col=hillCat, fill=hillCat, alpha=sign)) +
         geom_quasirandom(data=corRes %>% dplyr::filter(sign), dodge.width = .8, size=1.25) +
         geom_quasirandom(data=corRes %>% dplyr::filter(!sign), dodge.width = .8, size=1.25) +
         geom_boxplot(data=corRes, alpha=.5, outlier.size = -1, col="black",
                      position = position_dodge(width = .8), width = .7) +
-        scale_fill_manual(values=c("Coop-Enh"="cornflowerblue", "Coop-Rep"="salmon2", "nonReg"="#606060")) +
-        scale_color_manual(values=c("Coop-Enh"="cornflowerblue", "Coop-Rep"="salmon2", "nonReg"="#606060")) +
+        scale_fill_manual(values=c("Enhanced"="cornflowerblue", "Repressed"="salmon2", "Ctrl"="#606060")) +
+        scale_color_manual(values=c("Enhanced"="cornflowerblue", "Repressed"="salmon2", "Ctrl"="#606060")) +
         scale_alpha_manual(values=c("TRUE" = 1, "FALSE" = .2)) +
         coord_cartesian(ylim=c(-1, 1)) +
         scale_y_continuous(breaks=seq(-1, 1, by=0.5)) +
