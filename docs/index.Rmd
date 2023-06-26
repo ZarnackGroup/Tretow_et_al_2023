@@ -68,7 +68,22 @@ the degree of cooperative regulation.
 
 # RTstop profiling
 
-# ivCLIP
+[Summary_of_the_in_vitro_library.html](Summary_of_the_in_vitro_library.html)
+provides an overview about the complexity of the in vitro library. This includes
+information about binding sites as well as predicted and measured rG4s located
+in the constructs of the library.
+
+[Comparison_RTstop_profiling_and_predictions.html](Comparison_RTstop_profiling_and_predictions.html)
+elucidates the agreement of in silico rG4 predictions and rG4 formation measured
+with RTstop profiling. For this purpose, in silico predictions with varying 
+parameter settings have been performed that were compared against the RTstop
+profiling results.
+
+# in vitro CLIP
+
+[in_vitro_CLIP_analysis.html](in_vitro_CLIP_analysis.html)
+provides all analyses regarding HNRNPH1 in vitro binding to constructs classified
+as rG4 and non-rG4 containing in the RTstop profiling analysis.
 
 # TCGA analysis
 
