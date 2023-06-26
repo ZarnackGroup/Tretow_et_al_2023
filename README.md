@@ -47,13 +47,18 @@ The rendered HTML-Reports can be accessed via [the project's GitHub Page](https:
 	
 ## 6_RTstop profiling
 
-| File type    | File         |
-| ------------ | ------------ |
+| File type    | File                                                |
+| ---------------- | ----------------------------------------------- |
+| ![](png/R.png)   | rG4_prediction_on_in_vitro_library_constructs.R |
+| ![](png/Rmd.png) | Summary_of_the_in_vitro_library.Rmd             |
+| ![](png/Rmd.png) | Comparison_RTstop_profiling_and_predictions.Rmd |
 
 ## 7_ivCLIP
 
-| File type    | File         |
-| ------------ | ------------ |
+| File type    | File                           |
+| ---------------- | -------------------------- |
+| ![](png/Rmd.png) | in_vitro_CLIP_analysis.Rmd |
+
 
 ## 8_TCGA_analysis
 
