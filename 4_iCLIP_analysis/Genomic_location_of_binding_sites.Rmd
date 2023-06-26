@@ -243,7 +243,10 @@ pieDf <- data.frame(biotype=factor(c("protein_coding", "lncRNA",
 # A pie chart is created showing the fraction of binding sites overlapping a
 #   certain biotype.
 ggplot(pieDf, aes(x="", y=perc, fill = biotype)) +
-  scale_fill_lancet() +
+  scale_fill_manual(values=c("protein_coding" = "#CCCCCC",
+                             "lncRNA" = "#8C8C8C",
+                             "other" = "#4D4D4D",
+                             "no overlap" = "#262626")) +
   geom_col(color = 'black', position = position_stack(reverse = TRUE),
            show.legend = TRUE) +
   geom_text_repel(aes(x = 1.4, y = lab.ypos, label = paste(perc, "%")),
@@ -330,7 +333,7 @@ coeff <- max(boundGenesAtCutoff$expressed) /
 # The plot is a combination of a line and bar chart using two y-axes.
 ggplot() +
   geom_col(data=boundGenesAtCutoff, aes(x=cutoff, y=expressed/coeff),
-           fill="springgreen4", width=1) +
+           fill="darkgrey", width=1) +
   geom_line(data=boundGenesAtCutoff, aes(x=cutoff, y=fractionBound), size=1) +
   scale_x_continuous(breaks=seq(0,80,20)) +
   scale_y_continuous(name = "Fraction of genes bound",
@@ -339,9 +342,9 @@ ggplot() +
   labs(x="TPM threshold", y="") +
   myTheme +
   theme(
-    axis.title.y.right = element_text(color = "springgreen4", size=16),
-    axis.ticks.y.right = element_line(color="springgreen4"),
-    axis.text.y.right =  element_text(size = 14, colour="springgreen4")
+    axis.title.y.right = element_text(color = "darkgrey", size=16),
+    axis.ticks.y.right = element_line(color="darkgrey"),
+    axis.text.y.right =  element_text(size = 14, colour="darkgrey")
   ) 
 
 ```
@@ -382,19 +385,20 @@ fractionBoundGenes <- data.frame(
                  sum(genesExpressed$gene_type == "other") -
                      sum(genesExpressedBound$gene_type == "other"))) %>%
     pivot_longer(., cols=2:3, values_to="nGenes", names_to = "bound") %>%
-    mutate(bound = ifelse(bound == "bound", TRUE, FALSE)) %>%
-    mutate(bound=factor(bound, levels=c(FALSE, TRUE))) %>%
+    mutate(bound = ifelse(bound == "bound", "Yes", "No")) %>%
+    mutate(bound=factor(bound, levels=c("No", "Yes"))) %>%
     group_by(biotype) %>%
     mutate(fraction = nGenes / sum(nGenes)) %>% 
     ungroup
+    
     
 # A stacked barchart is created for each of the three biotypes. Stacks
 #   indicate the fraction of genes bound and not bound by HNRNPH. In addition,
 #   the percentage of genes bound and not bound is added.
 ggplot(fractionBoundGenes, aes(x=biotype, y=nGenes, fill=bound)) +
-  scale_fill_lancet() +
+  scale_fill_manual(values=c("Yes" = "black", "No" = "darkgrey")) +
   geom_col(position = "fill") +
-  geom_text(aes(label = scales::percent(fraction)), position = 'fill') + 
+  geom_text(aes(label = scales::percent(fraction)), position = 'fill', color="white") + 
   labs(y="Fraction of genes bound by HNRNPH") +
   myTheme +
   theme(legend.position = "right")
@@ -480,7 +484,10 @@ pieDf <- data.frame(feature=factor(c("CDS", "UTR5", "UTR3", "Intron"),
 # A pie chart is created showing the fraction of binding sites overlapping a
 #   certain feature
 ggplot(pieDf, aes(x="", y=perc, fill = feature)) +
-  scale_fill_manual(values=sapply(4,colorRampPalette(c("#003C77", "#81B4E7")))) +
+  scale_fill_manual(values=c("Intron" = "#CCCCCC",
+                             "UTR3" = "#8C8C8C",
+                             "UTR5" = "#4D4D4D",
+                             "CDS" = "#262626")) +
   geom_col(color = 'black', position = position_stack(reverse = TRUE),
            show.legend = TRUE) +
   geom_text_repel(aes(x = 1.4, y = lab.ypos, label = paste(perc, "%")),
@@ -527,7 +534,8 @@ genesWithRegulatedASevent <- genesWithRegulatedASevent[
 vennList <- list('Genes with regulated AS event' = genesWithRegulatedASevent,
                  'Bound genes' = genes$gene_id[genes$expressed & genes$bound])
 
-ggvenn(data=vennList, text_size=4, set_name_size=4.5, stroke_size=.5) +
+ggvenn(data=vennList, text_size=4, set_name_size=4.5, stroke_size=.5,
+       fill_color = c("#A09090", "#A8BAA1")) +
   scale_y_continuous(limits = c(-1, 1.5))
 
 ```
@@ -589,24 +597,19 @@ miniGenes <- miniGenes %>%
     as.data.frame %>%
     dplyr::select(hillCat, bound, nBSs) %>%
     dplyr::filter(hillCat %in% c("Coop-Enh", "Coop-Rep", "nonReg")) %>%
-    mutate(hillCat = factor(hillCat, levels=c("Coop-Enh", "Coop-Rep", "nonReg"))) %>%
+    mutate(hillCat = case_when(hillCat == "Coop-Enh" ~ "Enhanced",
+                               hillCat == "Coop-Rep" ~ "Repressed",
+                               TRUE ~ "Ctrl")) %>%
+    mutate(hillCat = factor(hillCat, levels=c("Enhanced", "Repressed", "Ctrl"))) %>%
     mutate(nBSs=ifelse(nBSs > 5, ">5", nBSs)) %>%
     mutate(nBSs = factor(nBSs, levels=c("0", "1", "2", "3", "4", "5", ">5")))
-
-miniGenes %>%
-    ggplot(., aes(x=hillCat, fill=bound)) + 
-        geom_bar(position="fill") +
-        geom_text(data=. %>% dplyr::count(hillCat), aes(label = n, x=hillCat, y=1.05), inherit.aes=F) +
-        scale_fill_manual(values=c("FALSE" = "grey", "TRUE" = "black")) +
-        labs(x="set", y="Fraction of cassette exon events") +
-        myTheme +
-        theme(legend.position = "right")
 
 miniGenes %>%
     ggplot(., aes(x=hillCat, fill=nBSs)) + 
         geom_bar(position="fill") +
         geom_text(data=. %>% dplyr::count(hillCat), aes(label = n, x=hillCat, y=1.05), inherit.aes=F) +
-        scale_fill_lancet() +
+        scale_fill_manual(values=c("0" = "#CACECB", "1" = "#C6D5C0", "2" = "#A5C1A1", "3" = "#83AD83",
+                                   "4" = "#5C9C66", "5" = "#4C9B84", ">5" = "#265043")) +
         labs(x="set", y="Fraction of cassette exon events") +
         myTheme +
         theme(legend.position = "right")

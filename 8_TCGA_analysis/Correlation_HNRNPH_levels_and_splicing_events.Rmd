@@ -24,6 +24,10 @@ library(DESeq2)
 library(knitr)
 library(ggbeeswarm)
 library(kableExtra)
+library(ggrastr)
+library(ggpointdensity)
+library(viridis)
+library(ggpubr)
 ```
 
 ```{r defineTheme}
@@ -118,6 +122,24 @@ PSIs <- PSIs %>%
 PSIs <- PSIs %>% dplyr::filter(hillCat %in% c("Coop-Enh", "Coop-Rep", "nonReg"))
 ```
 
+## Correlation HNRNPH1 and HNRNPH2
+
+At first, the correlation of HNRNPH1 and HNRNPH2 levels was checked.
+
+```{r}
+
+ggplot(HNRNPHexpression, aes(x=HNRNPH1, y=HNRNPH2)) +
+    rasterise(geom_pointdensity(size=3), dpi=300) +
+    geom_smooth(method="lm", se=FALSE) +
+    scale_x_continuous(breaks=1:16) +
+    scale_y_continuous(breaks=1:16) +
+    scale_color_viridis() +
+    stat_cor() +
+    labs(x="HNRNPH1 expression (vst)", y="HNRNPH2 expression (vst)", title="BRCA") +
+    myTheme +
+    theme(aspect.ratio=1)
+```
+
 # Correlations between *HNRNPH1/2* and Coop-Enh, Coop-Rep or nonReg events
 
 The PSI values cooperatively enhanced and repressed CE and ALE events as
@@ -188,6 +210,200 @@ At least for *HNRNPH2* we can see the expected regulation, namely that
 enhanced CE and ALE events are positively correlated with *HNRNPH2* levels
 and repressed CE and ALE events negatively. The non-regulated events
 have a median correlation coefficient of around 0.
+
+# Correlation examples
+
+## IL17RC - Repressed
+
+```{r}
+id <- "ENSG00000163702.20_7_CE_1"
+
+plotDF <- inner_join(HNRNPHexpression,
+                     PSIs %>% dplyr::filter(eventID == id) %>% dplyr::select(tcgaPatientBarcode, tcgaSampleBarcode, sampleType, PSI)
+                     ) %>% dplyr::filter(sampleType=="Primary Tumor") 
+
+ggplot(plotDF, aes(x=HNRNPH1, y=PSI)) +
+        rasterise(geom_pointdensity(size=3), dpi=300) +
+        geom_smooth(method="lm", se=FALSE) +
+        scale_x_continuous(breaks=1:16) +
+        coord_cartesian(ylim=c(0,1)) +
+        scale_color_viridis() +
+        stat_cor(label.y=1) +
+        labs(x="HNRNPH1 expression (vst)", y="IL17RC exon 18 (PSI)") +
+        myTheme +
+        theme(aspect.ratio = 1)
+
+ggplot(plotDF, aes(x=HNRNPH2, y=PSI)) +
+        rasterise(geom_pointdensity(size=3), dpi=300) +
+        geom_smooth(method="lm", se=FALSE) +
+        scale_x_continuous(breaks=1:16) +
+        coord_cartesian(ylim=c(0,1)) +
+        scale_color_viridis() +
+        stat_cor(label.y=1) +
+        labs(x="HNRNPH2 expression (vst)", y="IL17RC exon 18 (PSI)") +
+        myTheme +
+        theme(aspect.ratio = 1)
+```
+
+## NFE2L1 - Enhanced
+
+```{r}
+id <- "ENSG00000082641.16_4_CE_1"
+
+plotDF <- inner_join(HNRNPHexpression,
+                     PSIs %>% dplyr::filter(eventID == id) %>% dplyr::select(tcgaPatientBarcode, tcgaSampleBarcode, sampleType, PSI)
+                     ) %>% dplyr::filter(sampleType=="Primary Tumor") 
+
+ggplot(plotDF, aes(x=HNRNPH1, y=PSI)) +
+        rasterise(geom_pointdensity(size=3), dpi=300) +
+        geom_smooth(method="lm", se=FALSE) +
+        scale_x_continuous(breaks=1:16) +
+        coord_cartesian(ylim=c(0,.8)) +
+        scale_color_viridis() +
+        stat_cor(label.y=.8) +
+        labs(x="HNRNPH1 expression (vst)", y="NFE2L1 exon 5 (PSI)") +
+        myTheme +
+        theme(aspect.ratio = 1)
+
+ggplot(plotDF, aes(x=HNRNPH2, y=PSI)) +
+        rasterise(geom_pointdensity(size=3), dpi=300) +
+        geom_smooth(method="lm", se=FALSE) +
+        scale_x_continuous(breaks=1:16) +
+        coord_cartesian(ylim=c(0,.8)) +
+        scale_color_viridis() +
+        stat_cor(label.y=.8) +
+        labs(x="HNRNPH2 expression (vst)", y="NFE2L1 exon 5 (PSI)") +
+        myTheme +
+        theme(aspect.ratio = 1)
+```
+
+## MYL6 - Repressed
+
+```{r}
+id <- "ENSG00000092841.19_2_CE_1"
+
+plotDF <- inner_join(HNRNPHexpression,
+                     PSIs %>% dplyr::filter(eventID == id) %>% dplyr::select(tcgaPatientBarcode, tcgaSampleBarcode, sampleType, PSI)
+                     ) %>% dplyr::filter(sampleType=="Primary Tumor") 
+
+ggplot(plotDF, aes(x=HNRNPH1, y=PSI)) +
+        rasterise(geom_pointdensity(size=3), dpi=300) +
+        geom_smooth(method="lm", se=FALSE) +
+        scale_x_continuous(breaks=1:16) +
+        coord_cartesian(ylim=c(0,1)) +
+        scale_color_viridis() +
+        stat_cor(label.y=1) +
+        labs(x="HNRNPH1 expression (vst)", y="MYL6 exon 6 (PSI)") +
+        myTheme +
+        theme(aspect.ratio = 1)
+
+ggplot(plotDF, aes(x=HNRNPH2, y=PSI)) +
+        rasterise(geom_pointdensity(size=3), dpi=300) +
+        geom_smooth(method="lm", se=FALSE) +
+        scale_x_continuous(breaks=1:16) +
+        coord_cartesian(ylim=c(0,1)) +
+        scale_color_viridis() +
+        stat_cor(label.y=1) +
+        labs(x="HNRNPH2 expression (vst)", y="MYL6 exon 6 (PSI)") +
+        myTheme +
+        theme(aspect.ratio = 1)
+```
+
+## PIP4K2C - Enhanced
+
+```{r}
+id <- "ENSG00000166908.18_1_CE_1"
+
+plotDF <- inner_join(HNRNPHexpression,
+                     PSIs %>% dplyr::filter(eventID == id) %>% dplyr::select(tcgaPatientBarcode, tcgaSampleBarcode, sampleType, PSI)
+                     ) %>% dplyr::filter(sampleType=="Primary Tumor") 
+
+ggplot(plotDF, aes(x=HNRNPH1, y=PSI)) +
+        rasterise(geom_pointdensity(size=3), dpi=300) +
+        geom_smooth(method="lm", se=FALSE) +
+        scale_x_continuous(breaks=1:16) +
+        coord_cartesian(ylim=c(0.6,1)) +
+        scale_color_viridis() +
+        stat_cor(label.y=.6) +
+        labs(x="HNRNPH1 expression (vst)", y="PIP4K2C exon 5 (PSI)") +
+        myTheme +
+        theme(aspect.ratio = 1)
+
+ggplot(plotDF, aes(x=HNRNPH2, y=PSI)) +
+        rasterise(geom_pointdensity(size=3), dpi=300) +
+        geom_smooth(method="lm", se=FALSE) +
+        scale_x_continuous(breaks=1:16) +
+        coord_cartesian(ylim=c(0.6,1)) +
+        scale_color_viridis() +
+        stat_cor(label.y=.6) +
+        labs(x="HNRNPH2 expression (vst)", y="PIP4K2C exon 5 (PSI)") +
+        myTheme +
+        theme(aspect.ratio = 1)
+```
+
+## MST1R - Repressed
+
+```{r}
+id <- "ENSG00000164078.14_1_CE_1"
+
+plotDF <- inner_join(HNRNPHexpression,
+                     PSIs %>% dplyr::filter(eventID == id) %>% dplyr::select(tcgaPatientBarcode, tcgaSampleBarcode, sampleType, PSI)
+                     ) %>% dplyr::filter(sampleType=="Primary Tumor") 
+
+ggplot(plotDF, aes(x=HNRNPH1, y=PSI)) +
+        rasterise(geom_pointdensity(size=3), dpi=300) +
+        geom_smooth(method="lm", se=FALSE) +
+        scale_x_continuous(breaks=1:16) +
+        coord_cartesian(ylim=c(0,1)) +
+        scale_color_viridis() +
+        stat_cor(label.y=0) +
+        labs(x="HNRNPH1 expression (vst)", y="MST1R exon 11 (PSI)") +
+        myTheme +
+        theme(aspect.ratio = 1)
+
+ggplot(plotDF, aes(x=HNRNPH2, y=PSI)) +
+        rasterise(geom_pointdensity(size=3), dpi=300) +
+        geom_smooth(method="lm", se=FALSE) +
+        scale_x_continuous(breaks=1:16) +
+        coord_cartesian(ylim=c(0,1)) +
+        scale_color_viridis() +
+        stat_cor(label.y=0) +
+        labs(x="HNRNPH2 expression (vst)", y="MST1R exon 11 (PSI)") +
+        myTheme +
+        theme(aspect.ratio = 1)
+```
+
+## AKR1A1 - Enhanced
+
+```{r}
+id <- "ENSG00000117448.14_3_CE_1"
+
+plotDF <- inner_join(HNRNPHexpression,
+                     PSIs %>% dplyr::filter(eventID == id) %>% dplyr::select(tcgaPatientBarcode, tcgaSampleBarcode, sampleType, PSI)
+                     ) %>% dplyr::filter(sampleType=="Primary Tumor") 
+
+ggplot(plotDF, aes(x=HNRNPH1, y=PSI)) +
+        rasterise(geom_pointdensity(size=3), dpi=300) +
+        geom_smooth(method="lm", se=FALSE) +
+        scale_x_continuous(breaks=1:16) +
+        coord_cartesian(ylim=c(0.4,1)) +
+        scale_color_viridis() +
+        stat_cor(label.y=0.4) +
+        labs(x="HNRNPH1 expression (vst)", y="AKR1A1 exon 7 (PSI)") +
+        myTheme +
+        theme(aspect.ratio = 1)
+
+ggplot(plotDF, aes(x=HNRNPH2, y=PSI)) +
+        rasterise(geom_pointdensity(size=3), dpi=300) +
+        geom_smooth(method="lm", se=FALSE) +
+        scale_x_continuous(breaks=1:16) +
+        coord_cartesian(ylim=c(0.4,1)) +
+        scale_color_viridis() +
+        stat_cor(label.y=0.4) +
+        labs(x="HNRNPH2 expression (vst)", y="AKR1A1 exon 7 (PSI)") +
+        myTheme +
+        theme(aspect.ratio = 1)
+```
 
 # Session Information
 

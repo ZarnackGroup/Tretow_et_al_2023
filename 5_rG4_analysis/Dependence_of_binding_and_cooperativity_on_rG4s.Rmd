@@ -302,14 +302,23 @@ G4freqDf <- rbind(
 G4freqDf$rG4freq[G4freqDf$rG4freq > 2] <- ">2"
 G4freqDf$rG4freq <- factor(G4freqDf$rG4freq, levels=c("0", "1", "2", ">2"))
 
+# Just check if there is an overlapping G4
+G4freqDf <- G4freqDf %>%
+    mutate(hasG4 = ifelse(rG4freq == "0", "No", "Yes"))
+
+
 # Create a stacked barchart showing the fraction of CE events with a certain
 #   number of overlapping rG4s
 G4freqDf %>% 
-    ggplot(., aes(x=hillCat, fill=rG4freq)) +
+    mutate(hillCat = case_when(hillCat == "Coop-Enh" ~ "Enhanced",
+                               hillCat == "Coop-Rep" ~ "Repressed",
+                               TRUE ~ "Ctrl")) %>%
+    mutate(hillCat = factor(hillCat, levels=c("Enhanced", "Repressed", "Ctrl"))) %>%
+    ggplot(., aes(x=hillCat, fill=hasG4)) +
         geom_bar(position="fill") +
-        scale_fill_lancet() +
+        scale_fill_manual(values=c("No"="darkgrey", "Yes"="goldenrod3")) +
         facet_wrap(~facet, ncol=2) +
-        labs(y="Fraction of minigenes") +
+        labs(y="Fraction of events") +
         myTheme +
         theme(legend.position = "right",
               axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))
@@ -340,6 +349,97 @@ lowest for the non-regulated events. There is also a substantial fraction
 of enhanced CE events with more than two predicted rG4s in the intronic
 regions.
 
+Also statistical tests are performed, to check if the differences in the
+proportions are significant.  The “pairwise.prop.test()” function is used,
+which automatically corrects for multiple testing using the “BH” (default would
+be “holm”) method. Tests are performed and corrected independently for "AE" and
+"intronic".
+
+Here is the result for the left plot (AE):
+
+```{r}
+test_mat <- G4freqDf %>%
+    filter(facet=="AE") %>%
+    group_by(hillCat) %>%
+    dplyr::summarize(success=sum(hasG4 == "Yes"), trials=n()) %>%
+    tibble::column_to_rownames(., var="hillCat") %>%
+    as.matrix
+pairwise.prop.test(test_mat[,1], test_mat[,2], p.adjust.method = "BH")
+```
+
+Here is the result for the right plot (Intronic):
+
+```{r}
+test_mat <- G4freqDf %>%
+    filter(facet=="Intronic") %>%
+    group_by(hillCat) %>%
+    dplyr::summarize(success=sum(hasG4 == "Yes"), trials=n()) %>%
+    tibble::column_to_rownames(., var="hillCat") %>%
+    as.matrix
+pairwise.prop.test(test_mat[,1], test_mat[,2], p.adjust.method = "BH")
+```
+What is also visible, is that the fraction of inronic regions with an overlapping
+rG4 is much higher than the fraction of alternative exons with an overlapping rG4.
+However, the alternative exons are much shorter than the up to 3x300 nt intronic
+regions.
+
+To account for this difference, the number of overlapping predicted rG4s per
+nucleotide is computed. This is done by dividing the number of events with $\ge$ 
+overlapping rG4 by the summed up length of alternative exons / intronic regions.
+
+```{r}
+
+nG4s <- countOverlaps(AE_CoopEnh, regulatedMiniGenesG4s[!duplicated(regulatedMiniGenesG4s)])
+normalized_G4s_CoopEnh_AE <- sum(nG4s >0) / sum(width(AE_CoopEnh))
+
+nG4s <- countOverlaps(AE_CoopRep, regulatedMiniGenesG4s[!duplicated(regulatedMiniGenesG4s)])
+normalized_G4s_CoopRep_AE <- sum(nG4s >0) / sum(width(AE_CoopRep))
+
+nG4s <- countOverlaps(AE_nonReg, nonRegulatedMiniGenesG4s[!duplicated(nonRegulatedMiniGenesG4s)])
+normalized_G4s_nonReg_AE <- sum(nG4s >0) / sum(width(AE_nonReg))
+
+
+I1end_nG4s <- countOverlaps(I1end_CoopEnh, regulatedMiniGenesG4s[!duplicated(regulatedMiniGenesG4s)])
+I2start_nG4s <- countOverlaps(I2start_CoopEnh, regulatedMiniGenesG4s[!duplicated(regulatedMiniGenesG4s)])
+I2end_nG4s <- countOverlaps(I2end_CoopEnh, regulatedMiniGenesG4s[!duplicated(regulatedMiniGenesG4s)])
+
+normalized_G4s_CoopEnh_intronic <- sum((I1end_nG4s + I2start_nG4s + I2end_nG4s) >0) / sum(width(c(I1end_CoopEnh, I2start_CoopEnh, I2end_CoopEnh)))
+
+
+I1end_nG4s <- countOverlaps(I1end_CoopRep, regulatedMiniGenesG4s[!duplicated(regulatedMiniGenesG4s)])
+I2start_nG4s <- countOverlaps(I2start_CoopRep, regulatedMiniGenesG4s[!duplicated(regulatedMiniGenesG4s)])
+I2end_nG4s <- countOverlaps(I2end_CoopRep, regulatedMiniGenesG4s[!duplicated(regulatedMiniGenesG4s)])
+
+normalized_G4s_CoopRep_intronic <- sum((I1end_nG4s + I2start_nG4s + I2end_nG4s) >0) / sum(width(c(I1end_CoopRep, I2start_CoopRep, I2end_CoopRep)))
+
+
+I1end_nG4s <- countOverlaps(I1end_nonReg, nonRegulatedMiniGenesG4s[!duplicated(nonRegulatedMiniGenesG4s)])
+I2start_nG4s <- countOverlaps(I2start_nonReg, nonRegulatedMiniGenesG4s[!duplicated(nonRegulatedMiniGenesG4s)])
+I2end_nG4s <- countOverlaps(I2end_nonReg, nonRegulatedMiniGenesG4s[!duplicated(nonRegulatedMiniGenesG4s)])
+
+normalized_G4s_nonReg_intronic <- sum((I1end_nG4s + I2start_nG4s + I2end_nG4s) >0) / sum(width(c(I1end_nonReg, I2start_nonReg, I2end_nonReg)))
+
+data.frame(
+    set=c("Enhanced", "Enhanced",
+          "Repressed", "Repressed",
+          "Ctrl", "Ctrl"),
+    region=c("AE", "intronic",
+             "AE", "intronic",
+             "AE", "intronic"),
+    norm_G4_overlap=c(normalized_G4s_CoopEnh_AE, normalized_G4s_CoopEnh_intronic,
+                      normalized_G4s_CoopRep_AE, normalized_G4s_CoopRep_intronic,
+                      normalized_G4s_nonReg_AE, normalized_G4s_nonReg_intronic) * 1000
+) %>%
+    mutate(set=factor(set, levels=c("Enhanced", "Repressed", "Ctrl"))) %>%
+    ggplot(., aes(x=set, y=norm_G4_overlap)) +
+    geom_col(position="dodge") +
+    labs(y="Overlapping G4s per kb") +
+    facet_wrap(~region) +
+    myTheme +
+    theme(legend.position = "right")
+
+
+```
 
 # Dependence of Hill coefficient on the presence of rG4s
 
@@ -350,7 +450,7 @@ whether the degree of cooperativity depends on the presence of predicted
 rG4s.
 
 To answer this question, repressed and enhanced CE events were each
-grouped into five quantiles (0-20%, 20-40%, 40-60%, 60-80% and 80-100%)
+put into five groups (0-20%, 20-40%, 40-60%, 60-80% and 80-100%)
 based on the fitted Hill coefficient (nH). Afterwards the five groups of
 repressed CE events were compared for the presence of predicted rG4s
 overlapping the alternative exon and the five groups of enhanced CE
@@ -368,10 +468,10 @@ plotDf$nHquantile <- cut(abs(plotDf$nH),
                          labels=c("0-20%","20-40%","40-60%","60-80%","80-100%"))
 
 plotDf %>%
-    ggplot(., aes(x=nHquantile, fill=rG4freq)) +
-    scale_fill_lancet() +
+    ggplot(., aes(x=nHquantile, fill=hasG4)) +
+    scale_fill_manual(values=c("No"="darkgrey", "Yes"="goldenrod3")) +
     geom_bar(position="fill") +
-    labs(y="Fraction with predicted rG4") +
+    labs(x="Increasing hill coefficient", y="Fraction with predicted rG4") +
     myTheme +
     theme(legend.position = "bottom",
           aspect.ratio=1/.75,
@@ -387,6 +487,45 @@ plotDf %>% dplyr::count(nHquantile, rG4freq) %>%
 
 ```
 
+Also a statistical test is performed to check if the differences in the
+proportions are significant. The “prop.test()” function is applied on the lowest
+and highest quantile.
+
+Here is the result:
+
+```{r}
+test_mat <- plotDf %>%
+    group_by(nHquantile) %>%
+    dplyr::summarize(success=sum(hasG4 == "Yes"), trials=n()) %>%
+    tibble::column_to_rownames(., var="nHquantile") %>%
+    as.matrix
+prop.test(test_mat[c(1,5),1], test_mat[c(1,5),2])
+```
+
+To check for the strength of the relationship, I increase the number of groups
+by going in 10% steps and plotting the 10 groups against the fraction of events
+with $\ge$ 1 overlapping rG4.
+
+```{r}
+plotDf$new_nHquantile <- cut(abs(plotDf$nH), breaks=abs(plotDf$nH) %>% quantile(., seq(0,1,0.1)), include.lowest = TRUE, labels=c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)) %>% as.character %>% as.integer()
+
+plotDf %>% dplyr::select(hasG4, new_nHquantile) %>%
+    dplyr::group_by(new_nHquantile) %>%
+    dplyr::summarize(fraction=sum(hasG4 == "Yes")/dplyr::n()) %>%
+    ggplot(., aes(x=new_nHquantile, y=fraction)) +
+    geom_point(size=3, color="goldenrod3") +
+    geom_smooth(method="lm", se=FALSE, color="black") +
+    scale_x_continuous(breaks=1:10) +
+    stat_cor(method="spearman", cor.coef.name="Spearman_R", label.y=0.5) +
+    stat_cor(method="pearson", cor.coef.name="Pearson_R", label.y=0.45) +
+    labs(x="nH quantiles (10% steps)",
+         y="Fraction with predicted rG4") +
+    myTheme +
+    theme(aspect.ratio=1)
+
+```
+
+
 Here is the plot and the underlying data.frame for the enhanced CE
 events:
 
@@ -400,10 +539,10 @@ plotDf$nHquantile <- cut(abs(plotDf$nH),
                          labels=c("0-20%","20-40%","40-60%","60-80%","80-100%"))
 
 plotDf %>%
-    ggplot(., aes(x=nHquantile, fill=rG4freq)) +
-    scale_fill_lancet() +
+    ggplot(., aes(x=nHquantile, fill=hasG4)) +
+    scale_fill_manual(values=c("No"="darkgrey", "Yes"="goldenrod3")) +
     geom_bar(position="fill") +
-    labs(y="Fraction with predicted rG4") +
+    labs(x="Increasing hill coefficient", y="Fraction with predicted rG4") +
     myTheme +
     theme(legend.position = "bottom",
           aspect.ratio=1/.75,
@@ -423,6 +562,18 @@ For the cooperatively repressed CE events the fraction of events with
 at least one predicted rG4 overlapping the cassette/alternative exon
 increases with the degree of cooperativity suggesting a potential
 link between cooperativity and rG4 formation.
+
+Again a statistical test on the lowest and highest quantiles was performed.
+Here is the result:
+
+```{r}
+test_mat <- plotDf %>%
+    group_by(nHquantile) %>%
+    dplyr::summarize(success=sum(hasG4 == "Yes"), trials=n()) %>%
+    tibble::column_to_rownames(., var="nHquantile") %>%
+    as.matrix
+prop.test(test_mat[c(1,5),1], test_mat[c(1,5),2])
+```
 
 # Session Information
 

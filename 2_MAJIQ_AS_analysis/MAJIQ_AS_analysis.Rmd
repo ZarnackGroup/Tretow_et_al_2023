@@ -488,10 +488,11 @@ colnames(dpsiMatrix) <- strsplit(colnames(dpsiMatrix), ".", fixed=TRUE) %>%
     sapply(., "[[", 1)
 
 # Define colors
-myCols <- colorRamp2(c(-0.4, -0.15, 0, 0.15, 0.4), inferno(5))
+myCols <- colorRamp2(c(-0.3, -0.15, 0, 0.15, 0.3), RColorBrewer::brewer.pal(n = 5, name = "BrBG"))
 
 set.seed(123)
-Heatmap(dpsiMatrix, col = myCols, name = "dPSI")
+Heatmap(dpsiMatrix, col = myCols, row_km=3, name = "dPSI", show_row_dend = FALSE,
+        show_column_dend = FALSE, border=TRUE, row_title = NULL)
 ```
 
 The majority of cassette exons shows increased inclusion in the stronger
@@ -514,7 +515,8 @@ colnames(dpsiMatrix) <- strsplit(colnames(dpsiMatrix), ".", fixed=TRUE) %>%
     sapply(., "[[", 1)
 
 set.seed(123)
-Heatmap(dpsiMatrix, col = myCols, name = "dPSI")
+Heatmap(dpsiMatrix, col = myCols, row_km=3, name = "dPSI", show_row_dend = FALSE,
+        show_column_dend = FALSE, border=TRUE, row_title = NULL)
 ```
 
 Similar to the cassette exons, the inclusion of the first alternative
@@ -538,7 +540,8 @@ colnames(dpsiMatrix) <- strsplit(colnames(dpsiMatrix), ".", fixed=TRUE) %>%
     sapply(., "[[", 1)
 
 set.seed(123)
-Heatmap(dpsiMatrix, col = myCols, name = "dPSI")
+Heatmap(dpsiMatrix, col = myCols, row_km=3, name = "dPSI", show_row_dend = FALSE,
+        show_column_dend = FALSE, border=TRUE, row_title = NULL)
 ```
 
 Similar to the cassette exons, the inclusion of the retained introns is

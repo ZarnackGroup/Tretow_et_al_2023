@@ -471,12 +471,17 @@ rbind(
         mutate(event="IR")
 ) %>%
     mutate(event=factor(event, levels = c("CE", "ALE", "IR"))) %>%
-    mutate(hillCat=factor(hillCat, levels=c("Coop-Enh", "Coop-Rep", "nonCoop-Enh", "nonCoop-Rep"))) %>%
+    mutate(hillCat=case_when(hillCat == "Coop-Enh" ~ "Enhanced",
+                             hillCat == "Coop-Rep" ~ "Repressed",
+                             TRUE ~ "Non-cooperative")) %>%
+    group_by(event, hillCat) %>%
+    dplyr::summarize(Freq = sum(Freq)) %>%
+    mutate(hillCat=factor(hillCat, levels=c("Enhanced", "Repressed", "Non-cooperative"))) %>%
     ggplot(., aes(x=hillCat, y=Freq, fill=hillCat)) +
     geom_col(col="black") +
     facet_wrap(~event) +
     theme_bw() + 
-    scale_fill_manual(values=c("Coop-Enh" = "cornflowerblue", "Coop-Rep" = "salmon2", "nonCoop-Enh" = "#404040", "nonCoop-Rep" = "#404040")) +
+    scale_fill_manual(values=c("Enhanced" = "cornflowerblue", "Repressed" = "salmon2", "Non-cooperative" = "#404040")) +
     theme_bw() +
     labs(x="Hill category", y="Number of events") +
     myTheme +
