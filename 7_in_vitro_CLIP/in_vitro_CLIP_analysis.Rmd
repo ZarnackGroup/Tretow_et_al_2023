@@ -1,0 +1,633 @@
+---
+title: "in vitro CLIP analysis"
+author:
+- name: Mario Keller
+  affiliation: Faculty of Biological Sciences, Goethe University Frankfurt
+output:
+    BiocStyle::html_document:
+      toc: TRUE
+      toc_float: TRUE
+      code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE,
+                      crop=NULL, results = TRUE)
+```
+
+```{r libraries}
+library(tidyverse)
+library(knitr)
+library(ggExtra)
+library(ggpubr)
+library(rstatix)
+library(ggbeeswarm) 
+library(ggrastr)
+library(DESeq2)
+```
+
+```{r defineTheme}
+myTheme <- theme_bw() +
+    theme(axis.text = element_text(size = 14, colour="black"),
+          axis.title = element_text(size=16, colour="black"),
+          axis.ticks=element_line(color="black"),
+          axis.ticks.length=unit(.15, "cm"),
+          panel.border=element_rect(color="black", fill = NA),
+          panel.background = element_blank(),
+          plot.background = element_blank(),
+          legend.text = element_text(size=12),
+          legend.position = "none")
+```
+
+```{r paths}
+projectDir <- "/Users/jb/data/HNPRNPH/Tretow_et_al_2023"
+
+dataDir <- paste0(projectDir, "/data")
+iClipDir <- paste0(projectDir, "/4_iCLIP_analysis")
+RTstopDir <- paste0(projectDir, "/6_RTstop_profiling")
+```
+
+# Background
+
+Based on the RTstop profiling classification results, the binding in vitro 
+binding of HNRNPH to rG4 and non-rG4 containing constructs should be analyzed.
+
+# Data
+
+ivCLIP and RTstop counts per construct and condition are loaded from
+RDS-Files. For the RTstop profiling only KCl experiments were
+considered.
+
+In addition, constructClassification.rds is loaded. In addition, all the
+rG4 peaks of rG4 classified constructs are loaded to calculate the so-called 
+"G4 propensity" of the constructs, which is summed up signal of the rG4 peaks of
+a construct.
+
+```{r input}
+ivCLIP <- readRDS(paste0(dataDir,
+                         "/in_vitro_CLIP/invitroCLIP_March_2021.l.rds"))
+
+RTstop <- readRDS(paste0(dataDir,
+                         "/RTstop_profiling/RTstop.profiling.l.rds"))
+RTstop <- RTstop[c(1:3, 7:9)]
+
+constructClassification <- readRDS(paste0(dataDir,
+                         "/RTstop_profiling/constructClassification.rds"))
+
+constructInformation <- readRDS(paste0(dataDir,
+                         "/RTstop_profiling/constructInformation.rds"))
+
+allG4peaks <- readRDS(paste0(dataDir,
+                         "/RTstop_profiling/AllG4Peaks.rds"))
+```
+
+Here is an overview about the samples:
+
+```{r}
+data.frame(Experiment = c(rep("ivCLIP", length(ivCLIP)),
+                        rep("RTstop", length(RTstop))),
+           Nucleotide = c(names(ivCLIP) %>% strsplit(., "_", fixed=T) %>% sapply(.,"[[",1),
+                          names(RTstop) %>% strsplit(., "_", fixed=T) %>% sapply(.,"[[",1)),
+           Replicate = c(names(ivCLIP) %>% strsplit(., "_", fixed=T) %>% sapply(.,"[[",2),
+                          names(RTstop) %>% strsplit(., "_", fixed=T) %>% sapply(.,"[[",3))) %>%
+    kable(., "html", align="c") %>%
+    kableExtra::kable_styling("striped") %>%
+    kableExtra::scroll_box(height="100%", width = "94%")
+```
+
+```{r}
+rG4propensity <- allG4peaks %>%
+    as.data.frame %>%
+    group_by(seqnames) %>%
+    summarise(rG4propensity = sum(xlinksKCL_ratio)) %>%
+    dplyr::rename(ID=seqnames)
+```
+
+# Pre-processing
+
+## Creating read counts
+
+Construct readCounts for the ivCLIP and RTstop profiling experiments
+were computed as the sum across the 200 nts.
+
+```{r}
+ivCLIP_rc <-  lapply(ivCLIP, sum) %>%
+    bind_cols() %>%
+    as.data.frame %>%
+    mutate(ID=names(ivCLIP$GTP_rep1)) # %>%
+
+RTstop_rc <- lapply(RTstop, sum) %>%
+    bind_cols() %>%
+    as.data.frame %>%
+    mutate(ID=names(RTstop$GTP_KCL_rep1))
+```
+
+## Normalization by DESeq2
+
+For both ivCLIP and RTstop dds objects were created, followed by
+estimation of size factors and log2 transformation of normalized
+counts by the normTransform() function. For the RTstop profiling size factors
+were estimated based on all constructs, whereas for the ivCLIP Spike-Ins with a
+mean read count $\ge$ 100 were used.
+
+```{r}
+
+ivCLIP_dds <- DESeqDataSetFromMatrix(
+    countData = ivCLIP_rc[,1:8],
+    colData = data.frame(
+        condition=colnames(ivCLIP_rc)[1:8] %>%
+            strsplit("_", fixed=T) %>%
+            sapply("[[", 1),
+        rep=colnames(ivCLIP_rc)[1:8] %>%
+            strsplit("_", fixed=T) %>%
+            sapply("[[", 2)),
+    design = ~ condition)
+
+RTstop_dds <- DESeqDataSetFromMatrix(
+    countData = RTstop_rc[,1:6],
+    colData = data.frame(
+        condition=colnames(RTstop_rc)[1:6] %>%
+            strsplit("_", fixed=T) %>% sapply("[[", 3),
+        rep=colnames(RTstop_rc)[1:6] %>%
+            strsplit("_", fixed=T) %>%
+            sapply("[[", 3)),
+    design = ~ condition)
+
+ivCLIP_dds <- estimateSizeFactors(
+    ivCLIP_dds,
+    controlGenes = names(which(ivCLIP_rc[12001:12010,1:8] %>%
+                                   rowMeans() >= 100)) %>%
+        as.numeric())
+
+RTstop_dds <- estimateSizeFactors(
+    RTstop_dds)
+
+ivCLIP_log2 <- normTransform(ivCLIP_dds) %>%
+    assay %>%
+    as.data.frame %>%
+    cbind(., ID=ivCLIP_rc$ID)
+
+RTstop_log2 <- normTransform(RTstop_dds) %>%
+    assay %>%
+    as.data.frame %>%
+    cbind(., ID=RTstop_rc$ID)
+
+ #  GTP_rep1   GTP_rep2   GTP_rep3   GTP_rep4 7dGTP_rep1 7dGTP_rep2 7dGTP_rep3 7dGTP_rep4 
+ # 1.0924278  1.5627571  1.4357800  1.2228067  0.4278978  0.7560091  0.9555820  1.3209018 
+```
+
+For the upcoming analyses, I remove the Spike-Ins from the data.frame.
+
+```{r}
+ivCLIP_log2 <- ivCLIP_log2[1:12000,]
+```
+
+## Merging of replicates
+
+Replicates of the RTstop profiling and the ivCLIP are merged by computing
+the mean of normalized and log2-transformed counts.
+
+```{r}
+ivCLIP_log2 <- ivCLIP_log2 %>%
+    mutate(merge_ivCLIP_GTP=rowMeans(across(starts_with("GTP")))) %>%
+    mutate(merge_ivCLIP_7dGTP=rowMeans(across(starts_with("7dGTP"))))
+
+RTstop_log2 <- RTstop_log2 %>%
+    mutate(merge_RTstop_GTP=rowMeans(across(starts_with("GTP")))) %>%
+    mutate(merge_RTstop_7dGTP=rowMeans(across(starts_with("7dGTP"))))
+```
+
+## Combining the experiments
+
+The merged values of the RTstop profiling and ivCLIP were combined in a
+single data.frame.
+
+```{r}
+# Note that I checked the order:
+# > identical(ivCLIP_log2$ID, RTstop_log2$ID)
+# [1] TRUE
+
+Combined <- left_join(RTstop_log2 %>%
+                                   dplyr::select(ID,
+                                                 merge_RTstop_GTP,
+                                                 merge_RTstop_7dGTP),
+                               ivCLIP_log2 %>%
+                                   dplyr::select(ID,
+                                                 merge_ivCLIP_GTP,
+                                                 merge_ivCLIP_7dGTP))
+
+
+```
+
+In addition, for GTP and 7dGTP samples a normalized HNRNPH binding strength is
+computed as $ivCLIP_{log2} - RTstop_{log2}$. The idea of this step is to normalize
+the binding signal to the expression strength of the constructs, which is estimated
+from the RTstop profiling.
+
+```{r}
+Combined$normalizedBindingStrengthGTP <- Combined$merge_ivCLIP_GTP - Combined$merge_RTstop_GTP
+Combined$normalizedBindingStrength7dGTP <- Combined$merge_ivCLIP_7dGTP - Combined$merge_RTstop_7dGTP
+```
+
+## Annotating with G4 and non-G4 information
+
+As the final pre-processing step, the construct classification (rG4 / non-rG4)
+from the RTstop profiling is used to annotate the constructs. All constructs not
+classified are removed immediately, resulting in 2,169 constructs. In addition,
+the rG4propensity values are added to constructs classified as "rG4".
+
+```{r}
+Combined <- left_join(
+    Combined,
+    constructClassification %>%
+        dplyr::select(Construct.ID, regulationGroup,
+                      strongestPeakStrengthRatio, constructStrengthRatio) %>%
+        dplyr::rename(ID=Construct.ID, anno=regulationGroup)) %>%
+    na.omit() %>%
+    mutate(anno = ifelse(anno == "G4","rG4","non-rG4")) %>%
+    remove_rownames() %>%
+    mutate(anno=factor(anno, levels=c("rG4", "non-rG4")))
+
+Combined <- left_join(Combined, rG4propensity)
+```
+
+```{r}
+Combined %>% dplyr::count(anno) %>%
+    ggplot(., aes(x=anno, y=n)) +
+    geom_col() +
+    geom_text(aes(label = n), vjust = -0.5) +
+    labs(x="Classification", y="Number of constructs") +
+    myTheme +
+    theme(aspect.ratio = 2/1)
+```
+
+# Correlation RTstop and ivCLIP
+
+To analyze HNRNPH1 binding but also consider the expression strength
+of the constructs (approximated by RTstop profiling) ivCLIP and
+RTstop profiling log2 values are plotted against each other for
+GTP and 7dGTP experiments. 
+
+### GTP
+
+```{r}
+ggMarginal(
+    ggplot(Combined, aes(x=merge_RTstop_GTP, y=merge_ivCLIP_GTP, col=anno)) +
+        geom_point(alpha=.5) +
+        scale_color_manual(values=c("rG4" = "goldenrod3",
+                                    "non-rG4" = "darkgrey")) +
+        geom_smooth(method="lm") +
+        coord_cartesian(ylim=c(2.5,16.25)) +
+        labs(x="RTstop [log2]", y="ivCLIP [log2]") +
+        myTheme +
+        theme(aspect.ratio = 1/1, legend.position = "bottom"),
+type="density", groupFill=TRUE
+)
+```
+
+### 7dGTP
+
+```{r}
+ggMarginal(
+    ggplot(Combined, aes(x=merge_RTstop_7dGTP, y=merge_ivCLIP_7dGTP, col=anno)) +
+        geom_point(alpha=.5) +
+        scale_color_manual(values=c("rG4" = "goldenrod3",
+                                    "non-rG4" = "darkgrey")) +
+        geom_smooth(method="lm") +
+        coord_cartesian(ylim=c(2.5,16.25)) +
+        labs(x="RTstop [log2]", y="ivCLIP [log2]") +
+        myTheme +
+        theme(aspect.ratio = 1/1, legend.position = "bottom"),
+type="density", groupFill=TRUE
+)
+```
+
+I also performed a statistical test for GTP and 7dGTP, where I test for a 
+difference in binding between rG4 and non-rG4 constructs.
+
+Here is the P value of the Wilcoxon test for the GTP condition:
+
+```{r}
+res_1 <- wilcox.test(Combined %>% dplyr::filter(anno=="rG4") %>% pull(normalizedBindingStrengthGTP),
+                     Combined %>% dplyr::filter(anno=="non-rG4") %>% pull(normalizedBindingStrengthGTP))
+
+res_1$p.value
+```
+
+Here is the P value of the Wilcoxon test for the 7dGTP condition:
+
+```{r}
+res_2 <- wilcox.test(Combined %>% dplyr::filter(anno=="rG4") %>% pull(normalizedBindingStrength7dGTP),
+                     Combined %>% dplyr::filter(anno=="non-rG4") %>% pull(normalizedBindingStrength7dGTP))
+
+res_2$p.value
+```
+
+# Dependence of HNRNPH1 binding on rG4 propensity
+
+To check whether the propensity to form rG4s plays a role in the binding of
+HNRNPH1 to rG4 constructs, the rG4 constructs were binned by rG4 propensity and
+the enrichment (ivCLIP - RTstop) plotted.
+
+```{r}
+plotDF <- Combined %>%
+    dplyr::mutate(rG4propensity = ifelse(anno == "rG4", rG4propensity, 0)) %>%
+    mutate(bin=cut(rG4propensity, breaks=c(-1, 0, 0.2, 0.4, 0.6, 0.8, 1),
+                   labels = c("0.0", "0.0-0.2", "0.2-0.4", "0.4-0.6",
+                              "0.6-0.8", "0.8-1.0"))) %>%
+    pivot_longer(., cols=c("normalizedBindingStrengthGTP", "normalizedBindingStrength7dGTP"),
+                 names_to="facet", values_to="enrichment") %>%
+    mutate(facet=factor(ifelse(facet == "normalizedBindingStrengthGTP", "GTP", "7dGTP"),
+                        levels=c("GTP", "7dGTP")))
+
+plotDF %>%
+    ggplot(., aes(x=bin, y=enrichment, col=anno)) +
+        geom_quasirandom() +
+        geom_boxplot(alpha=.5, outlier.size = -1, col="black", position = position_dodge(width = 0.9)) +
+        scale_color_manual(values=c("rG4" = "goldenrod3",
+                                "non-rG4" = "darkgrey")) +
+        scale_y_continuous(breaks=seq(-8, 8, 4)) +
+        coord_cartesian(ylim=c(-8.5, 5.5)) +
+        facet_wrap(~facet) +
+        labs(x="G4 propensity") +
+        myTheme +
+        theme(aspect.ratio=1/1, 
+              axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+              legend.position = "bottom")
+```
+
+# Dependence of HNRNPH1 binding on rG4 propensity considering G-triplets
+
+As there might be differences due to differences in number of G-triplets between
+the bins, I also grouped constructs based on the amount of G-triplets they
+contain and use this information for facet wrapping.
+
+```{r}
+library(Biostrings)
+
+Combined <- left_join(
+    Combined,
+    constructInformation %>% select(ID = Construct.ID, Seq) %>% mutate(ID = as.character(ID))
+)
+
+dss <- DNAStringSet(Combined$Seq)
+G_triplet_hits <- vmatchPattern("GGG", dss)
+G_triplet_hits <- lapply(G_triplet_hits, function(ir)reduce(ir))
+G_triplet_hits <- lapply(G_triplet_hits, function(ir)width(ir) %/% 3)
+G_triplet_hits <- sapply(G_triplet_hits, function(v)sum(v))
+Combined$G_triplets <- G_triplet_hits
+
+
+# Combined$Gs_in_seq <- str_count(Combined$Seq, "G")
+
+plotDF <- Combined %>%
+    dplyr::mutate(rG4propensity = ifelse(anno == "rG4", rG4propensity, 0)) %>%
+    mutate(facet=cut(G_triplets, breaks=c(-Inf, 2, 4, 6, Inf),
+                   labels = c("<=2", "3/4", "5/6", ">6"))) %>%
+    mutate(bin=cut(rG4propensity, breaks=c(-1, 0, 0.2, 0.4, 0.6, 0.8, 1),
+                   labels = c("0.0", "0.0-0.2", "0.2-0.4", "0.4-0.6",
+                              "0.6-0.8", "0.8-1.0")))
+```
+
+## GTP
+
+```{r}
+
+plotDF %>%
+    ggplot(., aes(x=bin, y=normalizedBindingStrengthGTP, col=anno)) +
+        geom_quasirandom() +
+        geom_boxplot(alpha=.5, outlier.size = -1, col="black", position = position_dodge(width = 0.9)) +
+        scale_color_manual(values=c("rG4" = "goldenrod3",
+                                "non-rG4" = "darkgrey")) +
+        scale_y_continuous(breaks=seq(-8, 8, 4)) +
+        coord_cartesian(ylim=c(-8.5, 5.5)) +
+        facet_wrap(~facet, ncol=4, nrow=1) +
+        labs(x="rG4 propensity") +
+        myTheme +
+        theme(aspect.ratio=1/1, 
+              axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+              legend.position = "bottom")
+```
+
+## 7dGTP
+
+```{r}
+
+plotDF %>%
+    ggplot(., aes(x=bin, y=normalizedBindingStrength7dGTP, col=anno)) +
+        geom_quasirandom() +
+        geom_boxplot(alpha=.5, outlier.size = -1, col="black", position = position_dodge(width = 0.9)) +
+        scale_color_manual(values=c("rG4" = "goldenrod3",
+                                "non-rG4" = "darkgrey")) +
+        scale_y_continuous(breaks=seq(-8, 8, 4)) +
+        coord_cartesian(ylim=c(-8.5, 5.5)) +
+        facet_wrap(~facet, ncol=4, nrow=1) +
+        labs(x="rG4 propensity") +
+        myTheme +
+        theme(aspect.ratio=1/1, 
+              axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+              legend.position = "bottom")
+```
+
+# Binding strength differences between GTP and 7dGTP for rG4 constructs
+
+The final question was whether certain constructs show a stronger
+enrichment under GTP than under 7dGTP and whether this is related
+to a higher G4 propensity.
+
+For this purpose, binding strength under GTP and 7dGTP are plotted against each
+other and points colored by rG4 propensity. 
+
+```{r}
+ggMarginal(
+    ggplot(Combined %>%
+               dplyr::filter(anno=="rG4") %>%
+               dplyr::arrange(rG4propensity), aes(x=normalizedBindingStrength7dGTP, y=normalizedBindingStrengthGTP, col=rG4propensity)) +
+        rasterise(geom_point(alpha=1), dpi=300) +
+        viridis::scale_color_viridis(option="B", breaks = seq(0,1,.25), limits=c(0,1)) +
+        #geom_smooth(method="lm") + 
+        geom_abline(slope=1, intercept=0) +
+        coord_cartesian(xlim=c(-7,6), ylim=c(-7,6)) +
+        myTheme +
+        theme(aspect.ratio = 1/1, legend.position = "bottom", legend.text = element_text(size=8)),
+type="density", fill="grey"
+)
+```
+
+# Binding strength comparison with respect to RTstop profiling and rG4 prediction results
+
+In *Comparison_RTstop_profiling_and_predictions.html* rG4s were predicted for 
+rG4 and non-rG4 constructs and the agreement between the RTstop profiling
+classification and the in silico predictions analyzed. Based on this analysis
+we observed that for instance ~25% of non-rG4 constructs were predicted to
+actually contain an rG4. To check if this is true, we want to incorporate the
+in vitro binding strength based on the assumption that HNRNPH1 favors binding
+to folded rG4s. For this purpose, we create the following four sets:
+
+-  Measured rG4 and predicted rG4 (rG4_pos)
+-  Measured rG4 and no predicted rG4 (rG4_neg)
+-  No measured rG4 and predicted rG4 (non-rG4_pos)
+-  No measured rG4 and no predicted rG4 (non-rG4_neg)
+
+For the four sets I create binding strength plots for GTP and 7dGTP.
+
+```{r}
+constructClassificationWithG4Prediction <- readRDS(paste0(RTstopDir,
+                                                          "/rds_files/constructClassificationWithG4Prediction.rds"))
+Combined <- left_join(
+    Combined, 
+    constructClassificationWithG4Prediction %>% dplyr::select(ID = constructId,
+                                                              predictedG4)
+)
+
+combined_plot <- Combined %>% 
+    mutate(set = case_when(anno == "rG4" & predictedG4 ~ "rG4_pos",
+                           anno == "rG4" & !predictedG4 ~ "rG4_neg",
+                           anno == "non-rG4" & predictedG4 ~ "non-rG4_pos",
+                           anno == "non-rG4" & !predictedG4 ~ "non-rG4_neg")) %>%
+    mutate(set=factor(set, levels=c("rG4_pos", "rG4_neg", "non-rG4_pos", "non-rG4_neg"))) %>%
+    pivot_longer(., cols=c("normalizedBindingStrengthGTP", "normalizedBindingStrength7dGTP"),
+                 names_to="facet", values_to="enrichment") %>%
+    mutate(facet=factor(ifelse(facet == "normalizedBindingStrengthGTP", "GTP", "7dGTP"),
+                        levels=c("GTP", "7dGTP")))
+
+ggplot(combined_plot, aes(x=set, y=enrichment, col=anno)) +
+    geom_quasirandom() +
+    geom_boxplot(alpha=.5, outlier.size = -1, col="black") +
+    scale_color_manual(values=c("rG4" = "goldenrod3",
+                                "non-rG4" = "darkgrey")) +
+    facet_wrap(~facet, ncol=2) +
+    scale_y_continuous(breaks=seq(-8, 8, 4)) +
+    coord_cartesian(ylim=c(-8.5, 5.5)) +
+    myTheme + 
+    theme(aspect.ratio=1/1, 
+              axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+              legend.position = "bottom")
+
+csv <- read.csv("/Users/jb/data/HNPRNPH/additional analysis/RTstop_rG4_classification_with_G4mer_predictions.csv")
+
+plot_2 <- left_join(combined_plot %>% mutate(Construct.ID=as.numeric(ID)), csv %>% mutate(G4mer_label=as.logical(G4mer_label))) %>%
+    mutate(set2 = case_when(anno == "rG4" & G4mer_label ~ "rG4_pos",
+                           anno == "rG4" & !G4mer_label ~ "rG4_neg",
+                           anno == "non-rG4" & G4mer_label ~ "non-rG4_pos",
+                           anno == "non-rG4" & !G4mer_label ~ "non-rG4_neg")) %>%
+    mutate(set2=factor(set2, levels=c("rG4_pos", "rG4_neg", "non-rG4_pos", "non-rG4_neg")))
+
+ggplot(plot_2, aes(x=set2, y=enrichment, col=anno)) +
+    geom_quasirandom() +
+    geom_boxplot(alpha=.5, outlier.size = -1, col="black") +
+    scale_color_manual(values=c("rG4" = "goldenrod3",
+                                "non-rG4" = "darkgrey")) +
+    facet_wrap(~facet, ncol=2) +
+    scale_y_continuous(breaks=seq(-8, 8, 4)) +
+    coord_cartesian(ylim=c(-8.5, 5.5)) +
+    myTheme + 
+    theme(aspect.ratio=1/1, 
+              axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+              legend.position = "bottom")
+
+ggplot(plot_2, aes(x=rG4propensity, y=G4mer, color=G4mer_label))+
+    geom_point()+
+    geom_smooth(method="lm", se=F, color="red", lty=2, lwd=0.75)+
+    stat_cor(p.accuracy = 0.001, r.accuracy = 0.01, color="black", label.y=0.4, label.x=0.4)+
+    scale_color_manual(values=c("royalblue", "darkorange"))+
+    myTheme + 
+    theme(aspect.ratio=1/1, 
+              axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+              legend.position = "bottom")
+
+ggplot(plot_2, aes(x=enrichment, y=G4mer, color=anno))+
+    geom_point()+
+    geom_smooth(method="lm", se=F, color="red", lty=2, lwd=0.75)+
+    stat_cor(p.accuracy = 0.001, r.accuracy = 0.01, color="black", label.y=1.05, label.x=-10)+
+    facet_wrap(~facet, ncol=2) +
+    scale_color_manual(values=c("royalblue", "darkorange"))+
+    labs(x="normalizedBindingStrength")+
+    myTheme + 
+    theme(aspect.ratio=1/1, 
+              axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+              legend.position = "bottom")
+
+#openxlsx::write.xlsx(left_join(Combined %>% mutate(ID=as.numeric(ID)), csv %>% mutate(G4mer_label=as.logical(G4mer_label)) %>% dplyr::select(!sequence), by=join_by("ID" == "Construct.ID")), 
+#                     file="/Users/jb/data/HNPRNPH/additional analysis/RTstop_with_strengths.xlsx")
+```
+
+One can nicely see that binding strength in for the non-rG4_pos group (constructs
+with no measured but predicted rG4) show much weaker binding strength than
+constructs of the rG4_pos group (constructs with measured and predicted rG4).
+This observation strengthens the idea that these predictions are false positives.
+On the other side, the group rG4_neg (constructs with measured but not predicted
+rG4) show binding strength comparable to the rG4_pos group, indicating that the
+predictions are false negatives.
+
+# Grouping by in vivo binding site information and measured rG4 information
+
+One final question was whether constructs with a confirmed rG4 but lacking 
+an in vivo binding site show in vitro binding comparable to those with an in vivo
+binding site. If yes, this would indicate that some other RBP might prevent
+HNRNPH in vivo binding. Note that low in vivo expression might be a confounder as
+there might have been in vivo binding but signal was not strong enough due to
+low transcript abundance.
+
+To test this idea, we defined the following four sets:
+
+- in vivo binding site and measured rG4 (bound + rG4)
+- in vivo binding site and no measured rG4 (bound + no rG4)
+- no in vivo binding site and measured rG4 (not bound + rG4)
+- no in vivo binding site and no measured rG4 (not bound + no rG4)
+
+```{r}
+binding_sites <- readRDS(paste0(iClipDir, "/rds_files/HNRNPH_binding_sites.rds"))
+
+constructs_gr <- constructInformation %>% dplyr::select(Construct.ID, strand, coords)
+constructs_gr$coords <- paste0(constructs_gr$coords,":",constructs_gr$strand)
+meta <- constructs_gr %>% select(-strand)
+constructs_gr <- GRanges(constructs_gr$coords)
+mcols(constructs_gr) <- meta
+constructs_gr$binding_site <- FALSE
+constructs_gr$binding_site[findOverlaps(binding_sites, constructs_gr, type="within") %>% subjectHits %>% unique] <- TRUE 
+
+
+Combined <- left_join(
+    Combined,
+    constructs_gr %>% mcols %>% as.data.frame  %>%
+        select(ID = Construct.ID, binding_site) %>% mutate(ID = as.character(ID))
+) %>%
+    mutate(set = case_when(binding_site == TRUE & anno == "rG4" ~ "bound + rG4",
+                           binding_site == TRUE & anno == "non-rG4" ~ "bound + no rG4",
+                           binding_site == FALSE & anno == "rG4" ~ "not bound + rG4",
+                           binding_site == FALSE & anno == "non-rG4" ~ "not bound + no rG4",
+                           TRUE ~ "not expected")) %>%
+    mutate(set = factor(set, levels = c("bound + rG4", "bound + no rG4",
+                                        "not bound + rG4", "not bound + no rG4")))
+
+Combined %>%
+    pivot_longer(., cols=c("normalizedBindingStrengthGTP", "normalizedBindingStrength7dGTP"),
+                 names_to="facet", values_to="enrichment") %>%
+    mutate(facet=factor(ifelse(facet == "normalizedBindingStrengthGTP", "GTP", "7dGTP"),
+                        levels=c("GTP", "7dGTP"))) %>%
+    ggplot(., aes(x=set, y=enrichment)) +
+    geom_quasirandom() +
+    geom_boxplot(alpha=.5, outlier.size = -1, col="black") +
+    facet_wrap(~facet, ncol=2) +
+    scale_y_continuous(breaks=seq(-8, 8, 4)) +
+    coord_cartesian(ylim=c(-8.5, 5.5)) +
+    myTheme + 
+    theme(aspect.ratio=1/1, 
+              axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+              legend.position = "bottom")
+
+```
+
+We can see that at least some of the constructs in the not bound + rG4 group
+have strong in vitro binding. These might be candidates for further exploration 
+to check why they lack in vivo binding signal.
+
+# Session Information
+
+```{r}
+sessionInfo()
+```
