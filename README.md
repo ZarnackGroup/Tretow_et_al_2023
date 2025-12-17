@@ -22,6 +22,9 @@ All scripts can be run in R out of the box after installing the libraries specif
 ## Runtime
 The runtime varies inbetween the scripts from a few minutes to roughly 30 minutes, depending on the hardware used.
 
+## Data availability
+All data is publicy available at X and can be used to reproduce the analyses with the provided scripts.
+
 ## 1_Quality_assessment
 
 | File type        | File                    |
