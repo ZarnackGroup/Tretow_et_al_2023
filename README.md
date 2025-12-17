@@ -1,7 +1,7 @@
-# Tretow_et_al_2023
+# Tretow_et_al_2025
 
 This repository comprises all R-scripts and Rmarkdown files used to generate the results and
-plots in Tretow et al. 2023.
+plots in Tretow et al. 2025.
 
 The analyses are divided into 8 sections. The sections and the R scripts and Rmarkdown files
 within the sections must be run in the order given.
