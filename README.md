@@ -13,7 +13,7 @@ All scripts can be run on a standard computer. They have been coded and tested o
 The scripts have been tested to run on macOS version 15.6.1
 
 ## Dependencies: 
-The scripts require R version 3.X to run and have been tested on R version 3.22
+The scripts require R version 3 to run and have been tested on R version 3.22
 All libraries necessary to run a specific script are specified at its beginning.
 
 ## Installation Guide:
