@@ -19,6 +19,9 @@ All libraries necessary to run a specific script are specified at its beginning.
 ## Installation Guide:
 All scripts can be run in R out of the box after installing the libraries specified at the top of each script.
 
+## Runtime
+The runtime varies inbetween the scripts from a few minutes to roughly 30 minutes, depending on the hardware used.
+
 ## 1_Quality_assessment
 
 | File type        | File                    |
