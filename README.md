@@ -8,6 +8,17 @@ within the sections must be run in the order given.
 
 The rendered HTML-Reports can be accessed via [the project's GitHub Page](https://mchicken1988.github.io/Tretow_et_al_2023/).
 
+## System Requirements:
+All scripts can be run on a standard computer. They have been coded and tested on a MacBook Pro.
+The scripts have been tested to run on macOS version 15.6.1
+
+## Dependencies: 
+The scripts require R version 3.X to run and have been tested on R version 3.22
+All libraries necessary to run a specific script are specified at its beginning.
+
+## Installation Guide:
+All scripts can be run in R out of the box after installing the libraries specified at the top of each script.
+
 ## 1_Quality_assessment
 
 | File type        | File                    |
