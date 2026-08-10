@@ -43,7 +43,7 @@ myTheme <- theme_bw() +
 ```
 
 ```{r paths}
-projectDir <- "/Users/mariokeller/projects/HNRNPH_project/Tretow_et_al_2023"
+projectDir <- "/Users/jb/data/HNPRNPH/Tretow_et_al_2023"
 
 iClipDir <- paste0(projectDir, "/4_iCLIP_analysis")
 rG4Dir <- paste0(projectDir, "/5_rG4_analysis")
@@ -124,14 +124,10 @@ overlapping genes on the same strand (e.g if there is gene readthrough).
 
 ```{r}
 
-regulatedMiniGenesG4s <- regulatedMiniGenesG4s %>%
-    as(., "GRangesList") %>%
-    unlist
+regulatedMiniGenesG4s <- regulatedMiniGenesG4s %>% as(., "GRangesList") %>% unlist
 regulatedMiniGenesG4s <- regulatedMiniGenesG4s[!duplicated(regulatedMiniGenesG4s)]
 
-nonRegulatedMiniGenesG4s <- nonRegulatedMiniGenesG4s %>%
-    as(., "GRangesList") %>%
-    unlist
+nonRegulatedMiniGenesG4s <- nonRegulatedMiniGenesG4s %>% as(., "GRangesList") %>% unlist
 nonRegulatedMiniGenesG4s <- nonRegulatedMiniGenesG4s[!duplicated(nonRegulatedMiniGenesG4s)]
 ```
 
@@ -168,19 +164,114 @@ bindingSites$group[countOverlaps(bindingSites, bindingSitesG4s) > 0 & bindingSit
 
 # The four PureCLIP score distributions are shown as a combination
 #   of beeswarm plot and boxplot
-data.frame(group=bindingSites$group, score=bindingSites$score) %>%
-    mutate(group=factor(group, levels=c("-/-", "-/+", "+/-", "+/+"))) %>%
-    ggplot(., aes(x=group, y=log2(score), col=group, fill=group))+
-        ggrastr::rasterise(geom_quasirandom(dodge.width = 0.9), dpi=300) +
-        geom_boxplot(alpha=.5, outlier.size = -1, col="black", position = position_dodge(width = 0.9)) +
-        scale_color_manual(values=c("-/-" = "grey", "-/+" = "#F49738", "+/-" = "#CB6615", "+/+" = "#9A3415")) +
-        scale_fill_manual(values=c("-/-" = "grey", "-/+" = "#F49738", "+/-" = "#CB6615", "+/+" = "#9A3415")) +
-        stat_compare_means(method="kruskal.test", vjust=-2, hjust=0.1, size=3) +
-        coord_cartesian(ylim=c(0,10.5)) +
-        labs(y="PureClip score (log2)", x="G-triplet / rG4") +
-        myTheme +
-        theme(legend.position = "none", aspect.ratio = 1/.6)
+plot_df <- data.frame(group=bindingSites$group, score=bindingSites$score) %>%
+    mutate(group=factor(group, levels=c("-/-", "-/+", "+/-", "+/+")))
+ggplot(plot_df, aes(x=group, y=log2(score), col=group, fill=group))+
+    ggrastr::rasterise(geom_quasirandom(dodge.width = 0.9), dpi=300) +
+    geom_boxplot(alpha=.5, outlier.size = -1, col="black", position = position_dodge(width = 0.9)) +
+    geom_text(data = plot_df %>% group_by(group) %>% summarise(n = n()), 
+              aes(x=group, y=10.2, label=n), color="black", size=3.5) +
+    scale_color_manual(values=c("-/-" = "grey", "-/+" = "#F49738", "+/-" = "#CB6615", "+/+" = "#9A3415")) +
+    scale_fill_manual(values=c("-/-" = "grey", "-/+" = "#F49738", "+/-" = "#CB6615", "+/+" = "#9A3415")) +
+    stat_compare_means(method="kruskal.test", vjust=-2, hjust=0.1, size=3) +
+    coord_cartesian(ylim=c(0,10.5)) +
+    labs(y="PureClip score (log2)", x="G-triplet / rG4") +
+    myTheme +
+    theme(legend.position = "none", aspect.ratio = 1/.6)
+#ggsave(filename = "~/Desktop/H/final/1.pdf")
+
+count_df <- plot_df %>% count(group)
+ggplot(count_df, aes(group, n, fill = group)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = paste0(n, " (", round(100*n/sum(n),1), "%)")), vjust = -0.3) +
+  scale_fill_manual(values = c("-/-" = "grey", "-/+" = "#F49738", "+/-" = "#CB6615", "+/+" = "#9A3415")) +
+  labs(x = "G-triplet / rG4", y = "Number of binding sites") +
+  myTheme +
+  theme(legend.position = "none")
+#ggsave(filename = "~/Desktop/H/final/2.pdf")
+
+count_df2 <- plot_df %>% count(group) %>% mutate(percent = n / sum(n))
+ggplot(count_df2, aes(x = "", y = percent, fill = group)) +
+  geom_col(width = 1) +
+  coord_polar(theta = "y") +
+  geom_text(aes(label = scales::percent(percent)), position = position_stack(vjust = 0.5), color = "white") +
+  scale_fill_manual(values = c("-/-" = "grey", "-/+" = "#F49738", "+/-" = "#CB6615", "+/+" = "#9A3415")) +
+  theme_void()
+#ggsave(filename = "~/Desktop/H/final/3.pdf")
+
+count_df3 <- plot_df %>% mutate(group2=str_split(group, "/", simplify=T)[,2]) %>% count(group2) %>% mutate(percent = n / sum(n))
+ggplot(count_df3, aes(x = "", y = percent, fill = group2)) +
+  geom_col(width = 1) +
+  coord_polar(theta = "y") +
+  geom_text(aes(label = paste0(scales::percent(percent), " (", n, ")")), position = position_stack(vjust = 0.5), color = "white") +
+  scale_fill_manual(values = c("-" = "grey", "+" = "#9A3415")) +
+  theme_void()
+#ggsave(filename = "~/Desktop/H/final/6.pdf")
 ```
+
+```{r}
+plot_df <- data.frame(score = bindingSites$score, 
+                      rG4 = ifelse(countOverlaps(bindingSites, bindingSitesG4s) > 0, "rG4", "No rG4"))
+
+plot_df$score_bin <- cut(plot_df$score, breaks=unique(quantile(plot_df$score, probs = seq(0, 1, by=1/5), na.rm=T)), 
+                         include.lowest=T, labels = c("<20%", "20–40%", "40–60%", "60–80%", ">80%"))
+
+ggplot(plot_df, aes(score_bin, fill = rG4)) +
+    geom_bar(position = "fill") +
+    scale_y_continuous(labels = scales::percent) +
+    scale_fill_manual(values = c("No rG4" = "grey70", "rG4" = "#9A3415")) +
+    labs(x = "PureCLIP score quantile", y = "Binding sites with predicted rG4", fill = NULL) +
+    myTheme
+ggsave(filename = "~/Desktop/H/final/4.pdf")
+
+#################################################################################################################################################################################################################################
+n_bins <- 5
+
+plot_df <- data.frame(
+    score = bindingSites$score,
+    group = factor(
+        bindingSites$group,
+        levels = c("-/-", "-/+", "+/-", "+/+")
+    )
+)
+
+# Quantile breaks
+breaks <- quantile(
+    plot_df$score,
+    probs = seq(0, 1, length.out = n_bins + 1),
+    na.rm = TRUE
+)
+breaks <- unique(breaks)
+
+# Labels
+pct <- seq(0, 100, length.out = length(breaks))
+labels <- c(
+    paste0("<", pct[2], "%"),
+    paste0(pct[2:(length(pct)-2)], "–", pct[3:(length(pct)-1)], "%"),
+    paste0(">", pct[length(pct)-1], "%")
+)
+
+plot_df$score_bin <- cut(
+    plot_df$score,
+    breaks = breaks,
+    include.lowest = TRUE,
+    labels = labels
+)
+
+# Number of sites per bin
+bin_counts <- plot_df %>%
+    count(score_bin)
+
+ggplot(plot_df,
+       aes(score_bin, fill = group)) +
+    geom_bar(position = "fill") +
+    scale_y_continuous(labels = scales::percent) +
+    scale_fill_manual(values = c("-/-" = "grey", "-/+" = "#F49738", "+/-" = "#CB6615", "+/+" = "#9A3415")) +
+    labs(x = "PureCLIP score quantile", y = "BS with G-triplet / predicted rG4", fill = "G-triplet / rG4") +
+    myTheme
+ggsave(filename = "~/Desktop/H/final/5.pdf")
+```
+
 
 Here is the underlying data.frame as a table:
 
