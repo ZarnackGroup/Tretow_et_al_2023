@@ -27,6 +27,8 @@ library(ggrepel)
 library(Biostrings)
 library(BSgenome.Hsapiens.UCSC.hg38)
 library(ggseqlogo)
+library(ggpubr)
+library(plyranges)
 ```
 
 ```{r defineTheme}
@@ -43,7 +45,7 @@ myTheme <- theme_bw() +
 ```
 
 ```{r paths}
-projectDir <- "/Users/mariokeller/projects/HNRNPH_project/Tretow_et_al_2023"
+projectDir <- "/Users/jb/data/HNPRNPH/Tretow_et_al_2023"
 
 iClipDir <- paste0(projectDir, "/4_iCLIP_analysis")
 ```
@@ -124,16 +126,61 @@ around the center of all `r format(length(bindingSites), big.mark=",")`
 binding sites.
 
 ```{r}
+width <- 50
 
-allRSS <-RNAStringSet(getSeq(Hsapiens, bindingSites+23))
+allRSS <-RNAStringSet(getSeq(Hsapiens, bindingSites+(width/2-2)))
+mat <- as.matrix(allRSS)
+g4.rects2 <- tibble(xmin = which(colMeans(mat == "G")>0.35)-26, xmax = which(colMeans(mat == "G")>0.35)-26)
 
 ggplot() +
-    geom_logo(as.character(allRSS), seq_type="rna", method="bits") + 
-    scale_x_continuous(breaks = seq(1,51,5), labels = seq(-25, 25, 5)) +
+    geom_logo(as.character(allRSS), seq_type="rna", method="probability", rev_stack_order=T) + 
+    geom_rect(data = g4.rects2, aes(xmin = xmin + 25.5, xmax = xmax + 26.5, ymin = -Inf, ymax = Inf), inherit.aes = FALSE, fill = "gold", alpha = 0.15)+
+    scale_x_continuous(breaks = seq(1,width+1,5), labels = seq(-width/2, width/2, 5)) +
     labs(x="Position relative to binding site center") +
+    ggtitle("Overall")+
+    myTheme +
+    theme(aspect.ratio = 1/2.5)
+ggsave(filename = "~/Desktop/H/final/1.pdf")
+
+topBS <- bindingSites %>% filter(rank=="top20%")
+topRSS <-RNAStringSet(getSeq(Hsapiens, topBS+(width/2-2)))
+topplot <- ggplot() +
+    geom_logo(as.character(topRSS), seq_type="rna", method="probability", rev_stack_order=T) + 
+    geom_rect(data = g4.rects2, aes(xmin = xmin + 25.5, xmax = xmax + 26.5, ymin = -Inf, ymax = Inf), inherit.aes = FALSE, fill = "gold", alpha = 0.2)+
+    scale_x_continuous(breaks = seq(1,width+1,5), labels = seq(-width/2, width/2, 5)) +
+    labs(x="Position relative to binding site center") +
+    ggtitle("Top 20%")+
     myTheme +
     theme(aspect.ratio = 1/2.5)
 
+botBS <- bindingSites %>% filter(rank=="bottom20%")
+botRSS <-RNAStringSet(getSeq(Hsapiens, botBS+(width/2-2)))
+botplot <- ggplot() +
+    geom_logo(as.character(botRSS), seq_type="rna", method="probability", rev_stack_order=T) + 
+    geom_rect(data = g4.rects2, aes(xmin = xmin + 25.5, xmax = xmax + 26.5, ymin = -Inf, ymax = Inf), inherit.aes = FALSE, fill = "gold", alpha = 0.2)+
+    scale_x_continuous(breaks = seq(1,width+1,5), labels = seq(-width/2, width/2, 5)) +
+    labs(x="Position relative to binding site center") +
+    ggtitle("Bottom 20%")+
+    myTheme +
+    theme(aspect.ratio = 1/2.5)
+
+ggpubr::ggarrange(topplot, botplot, ncol=1, nrow=2)
+ggsave(filename = "~/Desktop/H/final/2.pdf")
+
+A <- colMeans(mat == "A")
+C <- colMeans(mat == "C")
+G <- colMeans(mat == "G")
+U <- colMeans(mat == "U")
+df <- data.frame(position = seq(-width/2, width/2), G = G, U=U, A=A, C=C)
+
+ggplot(df %>% pivot_longer(c(G,C,U,A)), aes(position, value, color=name)) +
+    geom_step(linewidth = 1.2, direction = "mid") +
+    geom_hline(yintercept = mean(mat == "G"), linetype = "dotted", colour = "grey40") +
+    geom_rect(data = g4.rects2, aes(xmin = xmin - 0.5, xmax = xmax + 0.5, ymin = -Inf, ymax = Inf), inherit.aes = FALSE, fill = "gold", alpha = 0.2)+
+    scale_color_manual(values=c('#109648', '#255C99', '#F7B32B', '#D62839'))+
+    ggtitle("Frequency of bases")+
+    theme_bw()
+ggsave(filename = "~/Desktop/H/final/3.pdf")
 ```
 
 Around the center there is a clear enrichment of G-stretches as well as 
@@ -258,6 +305,34 @@ ggplot(tetramerDf, aes(x=coop, y=nonReg, fill=Gstretch)) +
     labs(x="Mean tetramer count (coop)", y="Mean tetramer count (nonReg)") +
     myTheme +
     theme(aspect.ratio=1/1, legend.position = "right")
+
+tet2 <- tetramerDf %>% mutate(nG = str_count(kmer, "G"), log2FC = top20 / bottom20) %>% arrange(nG, log2FC)
+tet2$x <- seq_len(nrow(tet2))
+ggplot(tet2, aes(x = x, y = log2FC, colour = factor(nG))) +
+    geom_point(size = 2) +
+    scale_colour_brewer(palette = "YlGnBu", name = "# Gs") +
+    labs(x = "Tetramers (sorted by G content)", y = "Top20 / Bottom20") +
+    theme_bw()
+
+ggplot(tet2, aes(factor(nG), log2FC)) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_jitter(width = 0.15, alpha = 0.7) +
+    labs(x = "Number of Gs in tetramer", y = "enrichment") +
+    theme_bw()
+
+tet3 <- tetramerDf %>% mutate(nG = str_count(kmer, "G"), log2FC = top20) %>% arrange(nG, log2FC)
+tet3$x <- seq_len(nrow(tet3))
+ggplot(tet3, aes(x = x, y = log2FC, colour = factor(nG))) +
+    geom_point(size = 2) +
+    scale_colour_brewer(palette = "YlGnBu", name = "# Gs") +
+    labs(x = "Tetramers (sorted by G content)", y = "Top20") +
+    theme_bw()
+
+ggplot(tet3, aes(factor(nG), log2FC)) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_jitter(width = 0.15, alpha = 0.7) +
+    labs(x = "Number of Gs in tetramer", y = "Top20") +
+    theme_bw()
 ```
 
 Among the 20% strongest binding sites there is a clear enrichment of 
