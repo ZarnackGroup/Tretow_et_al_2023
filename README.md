@@ -7,6 +7,7 @@ The analyses are divided into 9 sections. The sections and the R scripts and Rma
 within the sections must be run in the order given.
 
 Section `9_biophysical_modeling` contains MatLab code used to create Figs. 4m-o and S5f-g.
+Section `10_mathematical_modeling` contains MatLab code used to create Figs. 6b-d and S7c.
 
 The rendered HTML-Reports can be found in the `docs` directory.
 
