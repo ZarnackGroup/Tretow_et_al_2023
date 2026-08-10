@@ -6,7 +6,7 @@ plots in Tretow et al. 2025.
 The analyses are divided into 9 sections. The sections and the R scripts and Rmarkdown files
 within the sections must be run in the order given.
 
-Section 9_biophysical_modeling contains MatLab code used to create Figs. 4m-o and S5f-g.
+Section `9_biophysical_modeling` contains MatLab code used to create Figs. 4m-o and S5f-g.
 
 The rendered HTML-Reports can be found in the `docs` directory.
 
