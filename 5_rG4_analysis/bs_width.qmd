@@ -1,0 +1,256 @@
+---
+title: "Define binding sites example code"
+author: "Melina Klostermann"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: 
+  html:
+    code-fold: true
+    code-overflow: scroll
+    code-summary: "Show code"
+    code-tools: true
+    code-line-numbers: true
+    
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-expand: false
+    number-sections: true
+    
+    theme: sandstone
+    fontsize: 11pt
+    linestretch: 1.5
+    fig-format: svg
+        
+    cap-location: margin
+    crossref:
+      fig-title: Fig
+    
+    embed-resources: true
+    link-external-newwindow: true
+    smooth-scroll: true
+    
+    execute:
+      echo: true
+      warning: false
+      cache: false
+
+---
+  
+```{r setup, include=FALSE}
+require("knitr")
+knitr::opts_chunk$set(warning=FALSE, message=FALSE, cache=FALSE, cache.lazy = FALSE) #, fig.pos = "!H", out.extra = ""
+```
+
+```{r libraries, include=FALSE}
+# ----------------------
+# Load libraries
+# ----------------------
+library(knitr)
+library(tidyverse)
+library(purrr)
+
+library(rtracklayer)
+library(BindingSiteFinder)
+library(GenomicRanges)
+library(GenomeInfoDb)
+library(txdbmaker)
+library(Biostrings)
+library(BSgenome.Hsapiens.UCSC.hg38)
+
+# set an output folder
+out <- "/Users/jb/data/HNPRNPH/additional analysis/bsfinderout/"
+
+set.seed(5)
+
+```
+
+# What is done here?
+
+This is an exemplary code to define binding sites from racoon_clip outputs. Here the replicates of the for the U2AF2 iCLIP3 dataset with 250ug RNA are used. 
+
+# Input files
+
+```{r}
+# ----------------------
+# Get input from racoon_clip
+# ----------------------
+# pureclip files
+pureclip_file <- "/Users/jb/data/HNPRNPH/Tretow_et_al_2023/data/iCLIP/PureCLIP_HNRNPH_crosslink_sites.bed"
+
+
+# bw files
+bw_dir <- "/Users/jb/data/HNPRNPH/Tretow_et_al_2023/data/iCLIP"
+bw.plus <- list.files(bw_dir, pattern = "*\\plus.bw$", full.names = TRUE, recursive = TRUE)
+bw.minus <- list.files(bw_dir, pattern = "*\\minus.bw$", full.names = TRUE, recursive = TRUE)
+```
+
+```{r eval = FALSE}
+# ----------------------
+# Prepare annotation
+# ----------------------
+# Note: run only once to prepare annotation files for BSF and save them as rds files
+
+# annotation file (download for example from GENCODE)
+annoFile <- "/Users/jb/data/HNPRNPH/Tretow_et_al_2023/data/gencode.v39.annotation.gtf.gz"
+out_gns <- paste0(out, "gns.rds")
+out_regions <- paste0(out, "regions.rds")
+
+# prepare annotation for BSF
+###########################
+# Make annotation database from gff3 file
+annoDb = txdbmaker::makeTxDbFromGFF(file = annoFile, format = "gtf")
+annoInfo = rtracklayer::import(annoFile, format = "gtf")
+
+
+# Get genes as GRanges
+gns = genes(annoDb)
+idx = match(gns$gene_id, annoInfo$gene_id)
+meta = cbind(elementMetadata(gns),
+             elementMetadata(annoInfo)[idx,])
+meta = meta[,!duplicated(colnames(meta))]
+elementMetadata(gns) = meta
+
+saveRDS(gns, out_gns)
+
+
+# Get regions as Granges
+cdseq = cds(annoDb) 
+intrns = unlist(intronsByTranscript(annoDb)) 
+utrs3 = unlist(threeUTRsByTranscript(annoDb)) 
+utrs5 = unlist(fiveUTRsByTranscript(annoDb)) 
+regions = GRangesList(CDS = cdseq, INTRON = intrns, UTR3 = utrs3, UTR5 = utrs5)
+
+saveRDS(regions, out_regions)
+```
+
+
+```{r}
+# read prepared annotation
+gns <- readRDS(paste0(out, "gns.rds"))
+regions <- readRDS(paste0(out, "regions.rds"))
+```
+
+
+## Pureclip peaks
+
+```{r}
+#-----------------
+# Peaks from pureclip
+#-----------------
+
+# read pureclip peaks
+peaks  = rtracklayer::import(con = pureclip_file, 
+                             format = "BED", 
+                             extraCols=c("additionalScores" = "character"))
+
+# clean pureclip peaks columns
+peaks$additionalScores = NULL
+peaks$name = NULL
+
+# optionally keep only standard chromosomes and drop chrM
+peaks = keepStandardChromosomes(peaks, pruning.mode = "coarse") %>% 
+                 dropSeqlevels(., "chrM", pruning.mode = "coarse" )
+
+# check number of peaks
+NROW(peaks)
+```
+
+
+## Metadata for BindingSiteFinder
+
+```{r}
+# --------------------
+# make metadata for BindingSiteFinder
+# --------------------
+
+meta = data.frame(
+  id = c(1), # give each sample a unique id
+  condition = c("250ug"), # add the condition for each sample (used for differential analysis), but one BSF object per condition needs to be used
+  clPlus = bw.plus, # crosslinks plus strand bigwig files
+  clMinus = bw.minus) # crosslinks minus strand bigwig files
+
+
+meta
+```
+
+# Make binding sites
+
+## Use automatic binding site generation
+
+```{r}
+# --------------------
+# run BindingSiteFinder in automatic mode
+# --------------------
+
+# make BSF objects
+bds_object = BSFDataSetFromBigWig(ranges = peaks, 
+                           meta = meta, 
+                           silent =T)
+
+# make inital BS allowing BSF to determine automatic parameters
+bds_automatic = BSFind(bds_object, 
+                 anno.genes = gns, 
+                 anno.transcriptRegionList = regions, 
+                 cutoff.geneWiseFilter = 0)
+
+
+# save automatic binding sites
+saveRDS(bds_automatic, paste0(out, "bds_automatic.rds"))
+exportToBED(bds_automatic, con = paste0(out, "binding_sites_automatic.bed"))
+```
+
+## Check automatic binding sites (and decide what parameters should be changed for final binding site definition)
+
+
+```{r fig.width=5, fig.height=5}
+# --------------------
+# display paramteres choosen by automatic BSF
+# --------------------
+
+bds_automatic <- readRDS(paste0(out, "bds_automatic.rds"))
+
+processingStepsFlowChart(bds_automatic)
+ggsave(filename = paste0(out, "processing_steps_automatic_bs.pdf"))
+```
+
+
+# Control (and optionally change) the binding site width
+
+
+```{r fig.width=5, fig.height=5}
+
+estimateBsWidthPlot(bds_automatic)
+ggsave(filename = paste0(out, "estimate_binding_site_width.pdf"))
+```
+
+```{r}
+# --------------------
+# Compare different binding site widths
+# --------------------
+
+# compute binding sites with different widths
+bds1 <- makeBindingSites(object = bds_object, bsSize = 5)
+bds2 <- makeBindingSites(object = bds_object, bsSize = 3)
+bds3 <- makeBindingSites(object = bds_object, bsSize = 7)
+bds4 <- makeBindingSites(object = bds_object, bsSize = 9)
+
+# summarize in list
+l = list(`automatic - bsSize = 5` = bds1, `close by - bsSize = 3` = bds2, 
+         `close by - bsSize = 7` = bds3, `close by - bsSize = 9` = bds4)
+# plot comparison
+rangeCoveragePlot(l, width = 20, show.samples = F, subset.chromosome = "chr1")
+ggsave(filename = paste0(out, "compare_binding_site_widths.pdf"))
+
+# save bs for igv
+exportToBED(bds2, con = paste0(out, "binding_sites_bs3.bed"))
+exportToBED(bds3, con = paste0(out, "binding_sites_bs7.bed"))
+exportToBED(bds4, con = paste0(out, "binding_sites_bs9.bed"))
+
+```
+
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
