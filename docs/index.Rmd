@@ -1,5 +1,5 @@
 ---
-title: "Tretow et al. 2023"
+title: "Tretow et al. 2025"
 author:
 - name: Mario Keller
   affiliation: Faculty of Biological Sciences, Goethe University Frankfurt
@@ -13,7 +13,7 @@ editor_options:
 ---
 
 This GitHub Page provides the rendered HTML-Reports comprising
-the figures and results of Tretow et al. 2023 published in XXX. The
+the figures and results of Tretow et al. 2025. The
 HTML-Reports are split into 8 analysis sections and can be accessed via
 the links below:
 
