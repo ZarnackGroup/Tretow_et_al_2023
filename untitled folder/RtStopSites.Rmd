@@ -1,0 +1,618 @@
+---
+title: "HNRNPH RTstop sites - GTP-NaCl"
+author: "Mirko Brueggemann"
+date: "`r format(Sys.time(), '%B %e, %Y')`"
+output:
+  bookdown::pdf_document2:
+    fig_caption: yes
+    keep_tex: yes
+  html_document:
+    df_print: paged
+  pdf_document: default
+graphics: yes
+geometry: margin=1in
+fontsize: 11pt
+header-includes:
+- \usepackage{placeins}
+---
+
+```{r knitr off, echo=FALSE, message=FALSE,cache=FALSE, results="hide", render=FALSE ,warning=FALSE}
+knitr::opts_chunk$set(echo=FALSE, error=FALSE, warning=FALSE,message=FALSE)
+```
+
+# Analysis Description
+
+This report summarizes the definition of RTstop sites on the in-vitro RTstop profiling data. The dataset consists of 3.000 individual sequences each with 4 different barcodes, resulting in 12.000 individual constructs. RTstop profiling was performed under 4 conditions (GTP+NaCl, GTP+KCl, 7d+NaCl, 7d+KCl). For each condition 3 replicates experiments exist.
+
+```{r,loadLibs}
+### ============================================================================
+### Load Packages
+### ----------------------------------------------------------------------------
+### 
+library(rtracklayer)
+library(GenomicRanges)
+library(ggplot2)
+library(AnnotationDbi)
+library(dplyr)
+library(reshape2)
+library(UpSetR)
+library(GenomicFeatures)
+library(kableExtra)
+library(knitr)
+library(ggrepel)
+library(gridExtra)
+library(grid)
+library(viridis)
+library(BindingSiteFinder)
+library(ComplexHeatmap)
+library(forcats)
+library(ggtext)
+library(patchwork)
+library(ggforce)
+library(ggpointdensity)
+library(knitr)
+library(tidyr)
+library(ggpointdensity)
+library(ggsci)
+```
+
+```{r}
+myGrey = "#808080"
+# Define plotting theme
+theme_nice <- function(size = 12) {
+    baseSize = size
+    largeSize = size + 2
+    smallSize = size - 2
+    theme_bw() +
+        theme(axis.text = element_text(size = smallSize),
+              axis.title = element_text(size = baseSize),
+              strip.text.x = element_text(size = baseSize),
+              ## legend
+              legend.text = element_text(size = baseSize),
+              legend.title = element_text(size = baseSize),
+              ## title
+              title = element_text(size = largeSize),
+              plot.title = element_text(size = largeSize),
+              plot.subtitle = element_text(size = smallSize),
+              plot.title.position = 'plot',
+              ## caption
+              plot.caption = element_text(hjust = 0,
+                                          face= "italic", size = smallSize),
+              plot.caption.position = "plot",
+        )
+}
+
+theme_nice_pie <- function(size = 12) {
+    baseSize = size
+    largeSize = size + 2
+    smallSize = size - 2
+    theme_void() +
+        theme(## legend
+              legend.text = element_text(size = baseSize),
+              legend.title = element_text(size = baseSize),
+              ## title
+              title = element_text(size = largeSize),
+              plot.title = element_text(size = largeSize),
+              plot.subtitle = element_text(size = smallSize),
+              plot.title.position = 'plot',
+              ## caption
+              plot.caption = element_text(hjust = 0,
+                                          face= "italic", size = smallSize),
+              plot.caption.position = "plot",
+        )
+}
+
+theme_pub <- function(){
+  theme_bw() + 
+  theme(axis.text = element_text(size = 6),
+        axis.title = element_text(size = 8),
+        title = element_text(size = 10),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        plot.title = element_text(size = 10),
+        strip.text.x = element_text(size = 8))
+} 
+
+theme_md <- function() {
+  theme(              ## nicer text formatting
+              plot.title = ggtext::element_markdown(),
+              plot.caption = ggtext::element_markdown(),
+              plot.subtitle = ggtext::element_markdown(),
+              axis.title.x = ggtext::element_markdown(),
+              axis.title.y = ggtext::element_markdown())
+}
+```
+
+# Definition of seed sites
+
+RTstops are grouped into sites (RTstop sites), equivalent to binding sites for iCLIP data. The merge is based on initially identified single-nucleotide wide seed sites (PureCLIP sites in iCLIP). These sites are defined for each construct based on a cutoff defined by the mean number of RTstop events per construct (with a minimum of 6 events). The cutoff is defined based on the merge of all three biological replicates.
+
+```{r}
+# load data
+constructInfo = readRDS("../../rds/construct.information.df.rds")
+constructSignal = readRDS("../../rds/RTstop.profiling.l.rds")
+```
+
+```{r, fig.width=10, fig.height=6, fig.cap="\\textbf{ColSums profile of crosslinks per replicate.}"}
+df = data.frame(rep1 = colSums(as.matrix(constructSignal$GTP_NaCL_rep1)),
+                rep2 = colSums(as.matrix(constructSignal$GTP_NaCL_rep2)),
+                rep3 = colSums(as.matrix(constructSignal$GTP_NaCL_rep3)),
+                pos = 1:200) %>% pivot_longer(-pos)
+
+p1 = ggplot(df, aes(x = pos, y = value, fill = name)) +
+  geom_col(width = 1) +
+  facet_wrap(~name) + 
+  theme_nice() +
+  labs(
+    title = "GTP_NACL",
+    x = "Position in construct",
+    y = "Count (read starts)")
+
+p2 = ggplot(df, aes(x = pos, y = value, fill = name)) +
+  geom_col(width = 1) +
+  facet_wrap(~name) + 
+  theme_nice() +
+  labs(
+    title = "GTP_NACL",
+    x = "Position in construct",
+    y = "Count (read starts)") +
+   xlim(22,200)
+
+p1 / p2 + plot_layout(guides='collect') &
+  theme(legend.position='top')
+```
+
+```{r, merge}
+# merge construct replicates
+constructSignalMerge = list(GTP_KCL = constructSignal$GTP_KCL_rep1 + 
+                              constructSignal$GTP_KCL_rep2 + 
+                              constructSignal$GTP_KCL_rep3,
+                            GTP_NaCL = constructSignal$GTP_NaCL_rep1 +
+                              constructSignal$GTP_NaCL_rep2 + 
+                              constructSignal$GTP_NaCL_rep3,
+                            `7dGTP_KCL` = constructSignal$`7dGTP_KCL_rep1` +
+                              constructSignal$`7dGTP_KCL_rep2` +
+                              constructSignal$`7dGTP_KCL_rep3`,
+                            `7dGTP_NaCL` = constructSignal$`7dGTP_NaCL_rep1` +
+                              constructSignal$`7dGTP_NaCL_rep2` + 
+                              constructSignal$`7dGTP_NaCL_rep3`)
+```
+
+```{r, functions}
+getInitialSites <- function(constructs, threshold, readThroughPosCutoff) {
+  m = as.matrix(constructs)
+  rownames(m) = names(constructs)
+  # match counts matrix and thresholds by constructID
+  idx = match(names(threshold), rownames(m))
+  m = m[idx,]
+  # apply per construct threshold on each row of matrix
+  m = m > threshold
+  # turn positions above threshold into granges
+  gr = apply(m, 1, function(y){
+    pos = which(y == TRUE)
+    if (length(pos) > 0) {
+      gr = GRanges(seqnames = "00000",
+                   ranges = IRanges(start = pos, width = 1),
+                   strand = "+")
+    }
+  })
+  # add construct IDs
+  # names(gr) = names(constructs)
+  # remove ranges with no RT site
+  gr = gr[lengths(gr) > 0]
+  gr = as(gr, "GRangesList")
+  gr = unlist(gr)
+  
+  # manage seqlevel/names
+  # add dummy range
+  gr0 = GRanges(seqnames = "00000", ranges = IRanges(start = 1, width = 1), strand = "+")
+  names(gr0) = "00000"
+  gr = c(gr0,gr)
+  # set proper seqnames/ levels  
+  seqlevels(gr) = unique(names(gr))
+  seqnames(gr) = names(gr)
+  # remove dummy ranges
+  gr = gr[c(2:length(gr))]
+  seqlevels(gr) = seqlevelsInUse(gr)
+  
+  # annotate ranges
+  gr0 = gr[start(gr) <= readThroughPosCutoff]
+  mcols(gr0)$type = "ReadThrough"
+  gr1 = gr[start(gr) > readThroughPosCutoff]
+  mcols(gr1)$type = "RTstop"
+  gr = c(gr0,gr1)
+  gr = sortSeqlevels(gr)
+  gr = sort(gr)
+  
+  return(gr)
+}
+
+findMean <- function(constructs, minVal, readThroughPosCutoff) {
+  m = as.matrix(constructs)
+  # count mean only on positions with signal
+  m[m == 0] = NA
+  # get mean RT stops (excluding read through region)
+  conMean = ceiling(rowMeans(m[,c(readThroughPosCutoff:ncol(m))], na.rm = TRUE))
+  conMean[!is.finite(conMean)] = 0
+  names(conMean) = names(constructs)
+  # apply lower boundary
+  conMean = conMean[conMean > minVal]
+  return(conMean)
+}
+
+```
+
+```{r, fig.width=10, fig.height=10, fig.cap="\\textbf{Example mean coverage plots for selected constructs.} Construcs were selected randomly from the indicated groups. Groups are formed based on the mean number of crosslinks."}
+# make example plots
+
+computeExamples <- function(signal, meanVec, lower, upper, n) {
+  # select examples
+  s1 = sample(meanVec[meanVec < upper & meanVec > lower], n)
+  # match read start counts
+  m = as.matrix(signal)
+  rownames(m) = names(signal)
+  idx = match(names(s1), rownames(m))
+  # organize dataframe for plotting
+  df = data.frame(con = t(m[idx,]), pos = 1:200) %>% pivot_longer(-pos)
+  df$name = sapply(strsplit(df$name,"\\."), `[`, 2)
+  df$cutoff = paste0(lower, " < x > ", upper)
+  df$cutoff = as.factor(df$cutoff)
+  df$ord = lower
+  # have means in separate df
+  meanDf = data.frame(name = names(s1), mean = s1, cutoff = paste0(lower, " < x > ", upper), ord = lower)
+  
+  l = list(df = df, meanDf = meanDf)
+  return(l)
+}
+
+conMean = findMean(constructs = constructSignalMerge$GTP_NaCL, minVal = 0, readThroughPosCutoff = 1)
+set.seed(1234)
+l1 = computeExamples(signal = constructSignalMerge$GTP_NaCL, meanVec = conMean, lower = 0, upper = 5, n = 3)
+l2 = computeExamples(signal = constructSignalMerge$GTP_NaCL, meanVec = conMean, lower = 5, upper = 10, n = 3)
+l3 = computeExamples(signal = constructSignalMerge$GTP_NaCL, meanVec = conMean, lower = 10, upper = 30, n = 3)
+l4 = computeExamples(signal = constructSignalMerge$GTP_NaCL, meanVec = conMean, lower = 30, upper = 100, n = 3)
+
+df = rbind.data.frame(l1$df, l2$df, l3$df, l4$df)
+meanDf = rbind.data.frame(l1$meanDf, l2$meanDf, l3$meanDf, l4$meanDf)
+
+
+p1 = ggplot(df, aes(x = pos, y = value, fill = cutoff)) +
+  geom_col(width = 1) +
+  facet_wrap(~fct_reorder(name, ord), scales = "free", ncol = 3) +
+  theme_nice() +
+  geom_hline(data = meanDf, aes(yintercept = mean), colour="grey50")
+
+p1 + plot_layout(guides='collect') &
+  theme(legend.position='top')
+```
+
+```{r, fig.width=12, fig.height=6}
+set.seed(3)
+l1 = computeExamples(signal = constructSignalMerge$GTP_NaCL, meanVec = conMean, lower = 0, upper = 5, n = 2)
+l2 = computeExamples(signal = constructSignalMerge$GTP_NaCL, meanVec = conMean, lower = 5, upper = 10, n = 2)
+l3 = computeExamples(signal = constructSignalMerge$GTP_NaCL, meanVec = conMean, lower = 10, upper = 30, n = 2)
+l4 = computeExamples(signal = constructSignalMerge$GTP_NaCL, meanVec = conMean, lower = 30, upper = 100, n = 2)
+
+df = rbind.data.frame(l1$df, l2$df, l3$df, l4$df)
+meanDf = rbind.data.frame(l1$meanDf, l2$meanDf, l3$meanDf, l4$meanDf)
+
+
+p1 = ggplot(df, aes(x = pos, y = value, fill = cutoff)) +
+  geom_col(width = 1) +
+  facet_wrap(~fct_reorder(name, ord), scales = "free_y", ncol = 4) +
+  geom_hline(data = meanDf, aes(yintercept = mean), colour="grey50") +
+  scale_fill_brewer(palette = "Dark2") +
+  theme_nice() +
+  theme_md() +
+  labs(title = "RTstop coverage of selected transctipts per group",
+       x = "Position in construct (nt)",
+       y =  "RTstop counts",
+       fill = "Threshold range") +
+  theme(legend.position = "top")
+
+p1
+```
+
+```{r}
+# calculate intial RT stop sites
+thresholds = findMean(constructs = constructSignalMerge$GTP_NaCL,
+                      minVal = 6, readThroughPosCutoff = 1)
+sites = getInitialSites(constructs = constructSignalMerge$GTP_NaCL,
+                        threshold = thresholds, readThroughPosCutoff = 18)
+```
+
+```{r, fig.width=8, fig.height=4, fig.cap="\\textbf{Distribution of computed seed sites on construct range.}"}
+df = data.frame(pos = as.numeric(start(sites)), type = sites$type)
+
+p1 = ggplot(df, aes(x = pos, fill = type)) +
+  geom_histogram(bins = 200) +
+  xlim(0,200) +
+  theme_nice() +
+  labs(x = "Position in construct",
+       y = "Count (initial sites)")
+
+p2 = ggplot(df, aes(x = pos, fill = type)) +
+  geom_histogram(bins = 30) +
+  xlim(0,30) +
+  theme_nice() +
+  labs(x = "Position in construct",
+       y = "Count (initial sites")
+
+p1 + p2 + plot_layout(guides='collect') &
+  theme(legend.position='top')
+```
+
+```{r, fig.width=8, fig.height=4, fig.cap="\\textbf{RTstop seed site detection summary} Detection threshold is equal to the mean coverage per construct with at least 6 crosslinks."}
+df = data.frame(siteYes = length(unique(seqnames(sites))),
+                siteNo = 12000 - length(unique(seqnames(sites)))) %>% 
+  pivot_longer(everything())
+
+p1 = ggplot(df, aes(x = name, y = value, fill = name)) +
+  geom_col() +
+  theme_nice() +
+  labs(x = "Construct category",
+       y = "Counts")
+
+df = data.frame(thresholds = thresholds)
+df$thresholds[df$thresholds > 30] = 30
+p2 = ggplot(df, aes(x = thresholds)) +
+  geom_bar() +
+  theme_nice() +
+  labs(x = "Detection thresholds",
+       y = "Counts") +
+  xlim(0,31)
+
+p1 + p2 + plot_layout(guides='collect') &
+  theme(legend.position='none')
+```
+
+
+\FloatBarrier
+\pagebreak
+
+# Definition of RTstop sites
+
+All seed sites located outside of the read-through region (position 1-18) are used to compute RTstop sites based on the merge and re-size routine using *BindingSiteFinder*. RTstop seeds were merged in to 3nt wide RTstop sites and two of the three positions needed to be a seed site. Full options:
+
+-   bsSize = 3
+-   minWidth = 1
+-   minCrosslinks = 2
+-   minClSites = 1
+
+Reproducibility threshold is set to the 5% quantile and has to be met by all three replicates. 
+
+## Selection of RTstop site width
+
+```{r}
+# setup meta info
+meta = data.frame(id = 1:3, condition = rep("GTP_NACL",3))
+# setup signal list
+sgn = list(signalPlus = constructSignal[4:6])
+names(sgn$signalPlus) = paste0(meta$id, "_", meta$condition)
+# setup seed sites
+sitesRT = sites[sites$type == "RTstop"]
+# make object
+bds = BSFDataSet(ranges = sitesRT, meta = meta, signal = sgn)
+```
+
+```{r, eval=FALSE}
+p = supportRatioPlot(bds, bsWidths = c(3,5,7,9,11,13,15,17), minClSites = 0)
+ggsave(filename = "suppRatioPlot3.png", plot = p, path = "./plots/", device = "png", width = 8, height = 6, units = "cm", dpi = 300)
+```
+
+```{r, out.width="50%", out.height="50%", fig.cap="\\textbf{Signal to noise ratio plot.} Sites are calculated for the indicated width. The ratio of crosslink events within sites compared to the sum of crosslink events directly neighbouring the sites on both sides is computed."}
+include_graphics("/Users/mirko/Projects/HNRNPH/02_markdowns/RTstop-profiling/01_BindingSites/condition_nacl/plots/suppRatioPlot3.png")
+```
+
+```{r}
+bds1 <- makeBindingSites(object = bds, bsSize = 3, minWidth = 0,
+                         minCrosslinks = 2, minClSites = 1)
+bds2 <- makeBindingSites(object = bds, bsSize = 5, minWidth = 0,
+                         minCrosslinks = 2, minClSites = 1)
+bds3 <- makeBindingSites(object = bds, bsSize = 7, minWidth = 0,
+                         minCrosslinks = 2, minClSites = 1)
+bds4 <- makeBindingSites(object = bds, bsSize = 9, minWidth = 0,
+                         minCrosslinks = 2, minClSites = 1)
+```
+
+```{r, fig.width=10, fig.height=6, fig.cap="\\textbf{RTstop event profiles of different RTstop site width options.}"}
+l = list(`1. bsSize = 3` = bds1, `2. bsSize = 5` = bds2, 
+         `3. bsSize = 7` = bds3, `4. bsSize = 9` = bds4)
+rangeCoveragePlot(l, width = 18)
+```
+
+
+```{r}
+# Final binding site settings
+bdsMerge <- makeBindingSites(object = bds, bsSize = 3, minWidth = 0,
+                        minCrosslinks = 2, minClSites = 1)
+
+sitesProcessed = getRanges(bdsMerge)
+export(sitesProcessed, "./data/sitesMergedNew.bed", format = "BED")
+
+df = getSummary(bdsMerge)
+df = format(df, big.mark = ".", decimal.mark = ",")
+kable(df, "latex", caption = "Merge and combine", booktabs = TRUE) 
+```
+
+
+\FloatBarrier
+\pagebreak
+
+## Reproducibility
+
+```{r, perReplicateCountFilter, fig.width=10, fig.height=4, fig.cap="\\textbf{Count filter pre replicate.} Distribution of summed up crosslinks for each replicate. The count threshold for each repliacte is indicated by a grey line (5% quantile)."}
+reproducibiliyCutoffPlot(bdsMerge, max.range = 20, cutoff = 0.05)
+```
+
+```{r, perReplicateSummary, fig.width=10, fig.height=5, fig.cap="\\textbf{Reproducibility summary.} Overview of binding sites that are shared between replicates. A binding site is reproducible if supported by all three replicates."}
+s1 = reproducibilityFilter(bdsMerge, cutoff = c(0.05), n.reps = c(3), returnType = "data.frame")
+m = make_comb_mat(s1)
+
+df = strsplit(names(comb_degree(m)), "")
+df = do.call(rbind,df)
+df = as.matrix(df)
+df = apply(df, 2, as.numeric)
+df = as.data.frame(df)
+
+df$supp = rowSums(df)
+rownames(df) = names(comb_degree(m))
+df$status = ifelse(df$supp >= 3, "rep", "not rep")
+
+ha = HeatmapAnnotation(
+  col = list(select = c("rep" = "#004d4d", "not rep" = "grey")),
+  "Sample intersections" = anno_barplot(comb_size(m), border = FALSE, gp = gpar(fill = "#595959"), height = unit(6, "cm")),
+    select = df$status
+)
+
+ht = UpSet(m,
+           set_order = c("X1_GTP_NACL", "X2_GTP_NACL", "X3_GTP_NACL"),
+           comb_order = order(comb_size(m), decreasing = T),
+           top_annotation = ha,
+           comb_col = "cornflowerblue", bg_col = "white", pt_size = unit(.5, "cm") ,
+           border = T, lwd = 2, bg_pt_col = "#333333"
+)
+
+ss = set_size(m)
+cs = comb_size(m)
+ht = draw(ht,  padding = unit(c(0, 0, 10, 0), "mm"))
+od = column_order(ht)
+decorate_annotation("Sample intersections", {
+    grid.text(format(cs[od], big.mark = ".", decimal.mark = ","), x = seq_along(cs), y = unit(cs[od], "native") + unit(.1, "pt"), 
+        default.units = "native", just = c("left", "bottom"), 
+        gp = gpar(fontsize = 8, col = "black"), rot = 45)
+})
+```
+
+```{r}
+bdsFinal = reproducibilityFilter(bdsMerge, cutoff = c(0.05), n.reps = c(3))
+sitesReproducible = getRanges(bdsFinal)
+
+rtracklayer::export(sitesReproducible, 
+       "./data/sitesReproducibleNew.bed",
+       format = "BED", 
+       trackLine = new("BasicTrackLine",
+                       name = "GTP-NaCl peaks reproducible",
+                       description = "Merged 3nt RTstop binding sites that are reproducible by all 3 replicates") )
+save(sitesReproducible, file = "./data/sitesReproducible.rda")
+```
+
+```{r, fig.width=10, fig.height=4, fig.cap="\\textbf{Replicate correlation with size = 3 of counts on log2 scale, before reproducibility filtering.}"}
+cov = coverageOverRanges(bds1, returnOptions = "merge_positions_keep_replicates")
+df = as.data.frame(mcols(cov)) 
+df = log2(df + 0.1)
+
+p1 = ggplot(df, aes(x = X1_GTP_NACL, y = X2_GTP_NACL)) +
+  geom_pointdensity() +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = 0.5,
+                                barwidth = unit(12, 'lines'), barheight = unit(.5, 'lines'))) 
+p2 = ggplot(df, aes(x = X1_GTP_NACL, y = X3_GTP_NACL)) +
+  geom_pointdensity() +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = 0.5,
+                                barwidth = unit(12, 'lines'), barheight = unit(.5, 'lines'))) 
+p3 = ggplot(df, aes(x = X3_GTP_NACL, y = X2_GTP_NACL)) +
+  geom_pointdensity() +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = 0.5,
+                                barwidth = unit(12, 'lines'), barheight = unit(.5, 'lines'))) 
+
+p1 + p2 + p3
+```
+
+```{r, fig.width=10, fig.height=4, fig.cap="\\textbf{Replicate correlation with size = 3 of counts on log2 scale, after reproducibility filtering.}"}
+cov = coverageOverRanges(bdsFinal, returnOptions = "merge_positions_keep_replicates")
+df = as.data.frame(mcols(cov)) 
+df = log2(df + 0.1)
+
+p1 = ggplot(df, aes(x = X1_GTP_NACL, y = X3_GTP_NACL)) +
+  geom_pointdensity() +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = 0.5,
+                                barwidth = unit(12, 'lines'), barheight = unit(.5, 'lines'))) 
+p2 = ggplot(df, aes(x = X1_GTP_NACL, y = X3_GTP_NACL)) +
+  geom_pointdensity() +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = 0.5,
+                                barwidth = unit(12, 'lines'), barheight = unit(.5, 'lines'))) 
+p3 = ggplot(df, aes(x = X3_GTP_NACL, y = X2_GTP_NACL)) +
+  geom_pointdensity() +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = 0.5,
+                                barwidth = unit(12, 'lines'), barheight = unit(.5, 'lines'))) 
+
+p1 + p2 + p3
+```
+
+
+\FloatBarrier
+\pagebreak
+
+## RTstop site summary tables
+
+```{r}
+### ============================================================================
+### Numbers
+### ----------------------------------------------------------------------------
+###
+b1 = setRanges(bds, sitesRT)
+c1 = coverageOverRanges(b1, returnOptions = "merge_positions_keep_replicates") %>% mcols() %>% as.matrix()
+
+b2 = setRanges(bds, sitesProcessed)
+c2 = coverageOverRanges(b2, returnOptions = "merge_positions_keep_replicates") %>% mcols() %>% as.matrix()
+
+b3 = setRanges(bds, sitesReproducible)
+c3 = coverageOverRanges(b3, returnOptions = "merge_positions_keep_replicates") %>% mcols() %>% as.matrix()
+
+df = data.frame(nPeaks = c(length(sitesRT),
+                           length(sitesProcessed),
+                           length(sitesReproducible)),
+                nConstructs = c(length(unique(seqnames(sitesRT))),
+                                length(unique(seqnames(sitesProcessed))),
+                                length(unique(seqnames(sitesReproducible)))),
+                nXlinks = c(sum(c1), sum(c2), sum(c3))
+)
+
+df = format(df, big.mark = ".", decimal.mark = ",")
+rownames(df) = c("Seed RT", "Merged", "Reproducible")
+
+kable(df, "latex", caption = "Processing Overview", booktabs = TRUE) 
+```
+
+```{r}
+### ============================================================================
+### xlinks in bs per replicate per filter step
+### ----------------------------------------------------------------------------
+###
+df = data.frame(
+  x1 = colSums(c1),
+  x2 = colSums(c2),
+  x3 = colSums(c3)
+)
+df = format(df, big.mark = ".", decimal.mark = ",")
+colnames(df) = c("Seed RT", "Merged", "Reproducible")
+kable(df, "latex", caption = "Xlinks in peaks/bs per replicate per filtering step", booktabs = TRUE) 
+```
+
+
+\FloatBarrier
+\pagebreak
+
+# Session Information
+
+```{r, session_info, include=TRUE, echo=TRUE, results='markup'}
+sessionInfo()
+```

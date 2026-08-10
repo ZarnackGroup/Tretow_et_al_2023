@@ -1,0 +1,119 @@
+---
+title: "Not predictable G4s"
+author: "Mario Keller"
+date: "`r format(Sys.time(), '%B %e, %Y')`"
+geometry: "left=1cm,right=1cm,top=1.5cm,bottom=1.5cm"
+output:
+  pdf_document:
+    fig_caption: yes
+    keep_tex: yes
+    toc: true
+    toc_depth: 3
+    number_sections: true
+
+header-includes:
+- \makeatletter\renewcommand*{\fps@figure}{h}\makeatother
+- \usepackage{placeins}
+---
+
+```{r libraries, echo=FALSE, message=FALSE, warning=FALSE}
+library(knitr)
+library(tidyr)
+library(egg)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(GenomicRanges)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE, fig.pos = 'h', fig.align = "center", fig.width = 6, fig.height=6)
+```
+
+```{r ggplot.themes, echo=FALSE, message=FALSE, warning=FALSE}
+ggplot.theme <- theme_bw() +
+      theme(
+        axis.text=element_text(size=7,face="bold", color = "black"),
+        axis.title.x=element_text(size=8,face="bold"),
+        axis.title.y=element_text(size=8,face="bold", vjust = 0),
+        plot.title = element_text(size=8,face="bold"),
+        legend.text = element_text(size=8,face="bold"),
+        legend.title = element_text(size=8,face="bold"),
+        legend.position = "bottom",
+        legend.direction="horizontal")
+
+ggplot.theme.no.legend <- theme_bw() +
+      theme(
+        axis.text=element_text(size=7,face="bold", color = "black"),
+        axis.title.x=element_text(size=8,face="bold"),
+        axis.title.y=element_text(size=8,face="bold", vjust = 0),
+        plot.title = element_text(size=8,face="bold"),
+        legend.text = element_text(size=8,face="bold"),
+        legend.title = element_text(size=8,face="bold"),
+        legend.position = "none",
+        legend.direction="vertical")
+```
+
+# Objectives
+
+The aim of this analysis was the identification of measured G4s (those with a positive and significant log2FC(KCl vs NaCl)) that were not predicted by pqsfinder or QGRS Mapper.
+
+```{r loadAndPrepareData}
+#Mirko's peaks and their regulation
+load("/Users/mariokeller/projects/HNRNPH_project/RTstop-profiling/03_PeakDifferencesFinal/data/peaksChange.rds")
+
+#Mirko's updated constructInfo dataframe
+load("/Users/mariokeller/projects/HNRNPH_project/RTstop-profiling/03_PeakDifferencesFinal/data/constructInfo2.rds")
+
+
+pqsDefaultRes <- readRDS("/Users/mariokeller/projects/HNRNPH_project/RTstop-profiling/rds/pqsDefaultRes.rds")
+pqsDefaultRes <- pqsDefaultRes[!seqnames(pqsDefaultRes) %in% 12001:12010]
+pqsScoreThreshold25Res <- readRDS("/Users/mariokeller/projects/HNRNPH_project/RTstop-profiling/rds/pqsScoreThreshold25Res.rds")
+pqsScoreThreshold25Res <- pqsScoreThreshold25Res[!seqnames(pqsScoreThreshold25Res) %in% 12001:12010]
+qgrsDefaultRes <- readRDS("/Users/mariokeller/projects/HNRNPH_project/RTstop-profiling/rds/qgrsDefaultRes.rds")
+qgrsDefaultRes <- qgrsDefaultRes[!seqnames(qgrsDefaultRes) %in% 12001:12010]
+```
+
+
+# Workflow
+
+I first determined all constructs with no predicted G4 in the three approaches (pqsfinder default, pqsfinder score threshold of 25 (less strigent) and QGRS Mapper default). Afterwards, I first determined all significantly upregulated peaks (padj $\le$ 0.05 and log2FC > 0) that are located on constructs where all significant peaks are upregulated (dirStatus == All up) and subsequently filtered these peaks to those located on a construct without G4 prediction.
+
+```{r constructsWithNoPredictionButMeasuredG4}
+withPrediction <- c(seqnames(pqsDefaultRes) %>% as.character, seqnames(pqsScoreThreshold25Res) %>% as.character, seqnames(qgrsDefaultRes) %>% as.character) %>% unique
+withoutPrediction <- setdiff(as.character(sprintf("%05d", 1:12000)), withPrediction)
+
+#get upregulated peaks
+upregPeaks <- peaksChange[peaksChange$log2FoldChange > 0 & peaksChange$padj<=0.05 & peaksChange$dirStatus=="All up"]
+#subset to upregulated peaks from constructs with no prediction
+upregPeaksWithoutPrediction <- upregPeaks[seqnames(upregPeaks) %in% withoutPrediction]
+
+kable(
+  data.frame(cat=c("Constructs with predicted G4", "Constructs without predicted G4", "Upregulated peaks", "Upregulated peaks and no prediction"),
+             n=c(length(withPrediction), length(withoutPrediction), length(upregPeaks), length(upregPeaksWithoutPrediction)))
+)
+```
+
+# Output 
+
+Results are stored in upregulatedPeaksWithoutPrediction.xlsx 
+
+```{r output}
+
+upregPeaksWithoutPrediction$regionID <- constructInfo2$Region.ID[match(upregPeaksWithoutPrediction$constructID, constructInfo2$Construct.ID)]
+upregPeaksWithoutPrediction$geneName <- constructInfo2$Gene.Name[match(upregPeaksWithoutPrediction$constructID, constructInfo2$Construct.ID)]
+
+output <- upregPeaksWithoutPrediction %>% as.data.frame() %>% tibble::rownames_to_column(., var="peakID") %>% mutate(., seqnames = as.character(seqnames)) %>% 
+  dplyr::select(., constructID, regionID, geneName, peakID, start, end, baseMean, log2FoldChange, padj, expressionStatus, dirStatus, highConf) %>% arrange(., desc(log2FoldChange))
+
+xlsx::write.xlsx(output, file="/Users/mariokeller/projects/HNRNPH_project/RTstop-profiling/XLSX/upregulatedPeaksWithoutPrediction.xlsx", row.names=FALSE)
+
+```
+
+\pagebreak 
+
+# Session Information
+
+```{r}
+sessionInfo()
+```

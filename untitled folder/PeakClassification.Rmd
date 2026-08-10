@@ -1,0 +1,745 @@
+---
+title: "HNRNPH RTstop sites - classification"
+author: "Mirko Brueggemann"
+date: "`r format(Sys.time(), '%B %e, %Y')`"
+output:
+  bookdown::pdf_document2:
+    fig_caption: yes
+    keep_tex: yes
+  html_document:
+    df_print: paged
+  pdf_document: default
+graphics: yes
+geometry: margin=1in
+fontsize: 11pt
+header-includes:
+- \usepackage{placeins}
+---
+
+```{r knitr off, echo=FALSE, message=FALSE,cache=FALSE, results="hide", render=FALSE ,warning=FALSE}
+knitr::opts_chunk$set(echo=FALSE, error=FALSE, warning=FALSE,message=FALSE)
+```
+
+
+# Analysis Description
+
+This report shows how to classify G4 peak containing constructs based on the number and positions of peaks inside the construct. The KCl RT-stop signal from all 3 replicates is summed up and represented as a matrix. Counts in this matrix are min-max normalized and spline transformed to smooth out the signal. 
+
+```{r,loadLibs}
+### ============================================================================
+### Load Packages
+### ----------------------------------------------------------------------------
+### 
+library(rtracklayer)
+library(GenomicRanges)
+library(ggplot2)
+library(AnnotationDbi)
+library(dplyr)
+library(reshape2)
+library(UpSetR)
+library(GenomicFeatures)
+library(kableExtra)
+library(knitr)
+library(ggrepel)
+library(gridExtra)
+library(grid)
+library(viridis)
+library(BindingSiteFinder)
+library(ComplexHeatmap)
+library(forcats)
+library(ggtext)
+library(patchwork)
+library(ggforce)
+library(ggpointdensity)
+library(knitr)
+library(tidyr)
+library(ggpointdensity)
+library(ggsci)
+library(DESeq2)
+library(edgeR)
+library(ggrastr)
+```
+
+```{r}
+myGrey = "#808080"
+# Define plotting theme
+theme_nice <- function(size = 12) {
+    baseSize = size
+    largeSize = size + 2
+    smallSize = size - 2
+    theme_bw() +
+        theme(axis.text = element_text(size = smallSize),
+              axis.title = element_text(size = baseSize),
+              strip.text.x = element_text(size = baseSize),
+              ## legend
+              legend.text = element_text(size = baseSize),
+              legend.title = element_text(size = baseSize),
+              ## title
+              title = element_text(size = largeSize),
+              plot.title = element_text(size = largeSize),
+              plot.subtitle = element_text(size = smallSize),
+              plot.title.position = 'plot',
+              ## caption
+              plot.caption = element_text(hjust = 0,
+                                          face= "italic", size = smallSize),
+              plot.caption.position = "plot",
+        )
+}
+
+theme_nice_pie <- function(size = 12) {
+    baseSize = size
+    largeSize = size + 2
+    smallSize = size - 2
+    theme_void() +
+        theme(## legend
+              legend.text = element_text(size = baseSize),
+              legend.title = element_text(size = baseSize),
+              ## title
+              title = element_text(size = largeSize),
+              plot.title = element_text(size = largeSize),
+              plot.subtitle = element_text(size = smallSize),
+              plot.title.position = 'plot',
+              ## caption
+              plot.caption = element_text(hjust = 0,
+                                          face= "italic", size = smallSize),
+              plot.caption.position = "plot",
+        )
+}
+
+theme_pub <- function(){
+  theme_bw() + 
+  theme(axis.text = element_text(size = 6),
+        axis.title = element_text(size = 8),
+        title = element_text(size = 10),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        plot.title = element_text(size = 10),
+        strip.text.x = element_text(size = 8))
+} 
+
+theme_md <- function() {
+  theme(              ## nicer text formatting
+              plot.title = ggtext::element_markdown(),
+              plot.caption = ggtext::element_markdown(),
+              plot.subtitle = ggtext::element_markdown(),
+              axis.title.x = ggtext::element_markdown(),
+              axis.title.y = ggtext::element_markdown())
+}
+```
+
+```{r}
+minMaxNorm <- function(m) {
+  nM = apply(m, 1, function(x){
+    n = ((x - min(x)) / (max(x) - min(x)))
+    return(n)
+  })
+  nM = t(nM)
+  return(nM)
+}
+
+smoothing <- function(y, lambda, dim){
+  p <- length(y)
+  
+  which(y != max(y))
+  if ( length(which(y != max(y))) != 0 ){
+    x = c(1:p)
+    y.smooth = smooth.spline(x, y, spar = lambda)
+    x_new = seq(1, p, p/dim)
+    y_new = predict(y.smooth, x_new)$y
+    y_new = y_new / max(y_new)
+    return(y_new)
+  } 
+  
+  x_new <- seq(1, p, p / dim)
+  y_new <- rep( max(y), length(x_new) )
+  return(y_new)
+}
+```
+
+
+# Count smoothing and transformation
+
+```{r}
+# make signal matrix
+constructSignal = readRDS("../rds/RTstop.profiling.l.rds")
+masterMatrKCL = as.matrix(constructSignal$GTP_KCL_rep1) + as.matrix(constructSignal$GTP_KCL_rep2) + as.matrix(constructSignal$GTP_KCL_rep3)
+rownames(masterMatrKCL) = names(constructSignal$GTP_KCL_rep1)
+
+# load G4 peaks
+G4Peaks = readRDS("../03_PeakDifferencesFinal/data/G4Peaks.rds")
+masterMatrKCL = masterMatrKCL[rownames(masterMatrKCL) %in% G4Peaks$constructID,]
+
+# normalize matrix
+normKCL = minMaxNorm(masterMatrKCL)
+
+# apply different smoothing levels
+smoothKCL_par1 = t(apply(normKCL, 1, smoothing, lambda=0.4, dim=400))
+smoothKCL_par2 = t(apply(normKCL, 1, smoothing, lambda=0.5, dim=400))
+smoothKCL_par3 = t(apply(normKCL, 1, smoothing, lambda=0.6, dim=400))
+saveRDS(smoothKCL_par1, file = "/Users/mirko/Projects/HNRNPH/02_markdowns/RTstop-profiling/04_PeakClassification/data/smoothKCL_par1.rds")
+saveRDS(smoothKCL_par2, file = "/Users/mirko/Projects/HNRNPH/02_markdowns/RTstop-profiling/04_PeakClassification/data/smoothKCL_par2.rds")
+saveRDS(smoothKCL_par3, file = "/Users/mirko/Projects/HNRNPH/02_markdowns/RTstop-profiling/04_PeakClassification/data/smoothKCL_par3.rds")
+```
+
+```{r, fig.width=8, fig.height=5, fig.cap="\\textbf{Heatmaps of different smooting levels before clustering.}"}
+set.seed(1234)
+custom.col = viridis(10, option = "G", direction = -1)
+
+idx = sample(1:(nrow(smoothKCL_par1)), 500)
+
+m1 = smoothKCL_par1[idx,]
+m2 = smoothKCL_par2[idx,]
+m3 = smoothKCL_par3[idx,]
+
+h1 = Heatmap(m1, column_title = "Norm+Smooth 0.4", name = "Xlinks",
+             cluster_columns = F, cluster_rows = T,
+             show_row_names = FALSE,
+             show_column_names = T, border = T, col = custom.col,
+             heatmap_legend_param = list(
+               at = c(0,0.5, 1), labels = c("0", "0.5", "1"),
+               legend_width = unit(6, "cm"),
+               title_position = "topleft", direction = "horizontal"
+             ), use_raster = TRUE
+)
+h2 = Heatmap(m2, column_title = "Norm+Smooth 0.5", name = "Xlinks",
+             cluster_columns = F, cluster_rows = T,
+             show_row_names = FALSE,
+             show_column_names = T, border = T, col = custom.col,
+             heatmap_legend_param = list(
+               at = c(0,0.5, 1), labels = c("0", "0.5", "1"),
+               legend_width = unit(6, "cm"),
+               title_position = "topleft", direction = "horizontal"
+             ), use_raster = TRUE
+)
+h3 = Heatmap(m3, column_title = "Norm+Smooth 0.6", name = "Xlinks",
+             cluster_columns = F, cluster_rows = T,
+             show_row_names = FALSE,
+             show_column_names = T, border = T, col = custom.col,
+             heatmap_legend_param = list(
+               at = c(0,0.5, 1), labels = c("0", "0.5", "1"),
+               legend_width = unit(6, "cm"),
+               title_position = "topleft", direction = "horizontal"
+             ), use_raster = TRUE
+)
+
+l = h1 + h2 + h3
+draw(l, heatmap_legend_side = "bottom")
+```
+
+```{r, laodUMAP}
+# load UMAP classification results
+umapKCL_par1 = readRDS("/Users/mirko/Projects/HNRNPH/02_markdowns/RTstop-profiling/04_PeakClassification/data/umapKCL_par1.rds")
+umapKCL_par2 = readRDS("/Users/mirko/Projects/HNRNPH/02_markdowns/RTstop-profiling/04_PeakClassification/data/umapKCL_par2.rds")
+umapKCL_par3 = readRDS("/Users/mirko/Projects/HNRNPH/02_markdowns/RTstop-profiling/04_PeakClassification/data/umapKCL_par3.rds")
+```
+
+```{r, fig.width=10,fig.height=4, fig.cap="\\textbf{UMAP transformation with Kmeans clustering of different smooting settings.}"}
+group_par1 = kmeans(umapKCL_par1$layout, centers = 2)
+df1 = data.frame(x = umapKCL_par1$layout[,1],
+                y = umapKCL_par1$layout[,2],
+                group = factor(group_par1$cluster))
+
+group_par2 = kmeans(umapKCL_par2$layout, centers = 2)
+df2 = data.frame(x = umapKCL_par2$layout[,1],
+                y = umapKCL_par2$layout[,2],
+                group = factor(group_par2$cluster))
+
+group_par3 = kmeans(umapKCL_par3$layout, centers = 2)
+df3 = data.frame(x = umapKCL_par3$layout[,1],
+                y = umapKCL_par3$layout[,2],
+                group = factor(group_par3$cluster))
+
+p1 = ggplot(df1, aes(x, y, color = group)) +
+  ggrastr::geom_point_rast(size = 0.2) +
+  theme_nice() +
+  scale_color_manual(values = viridis(n = 5, option = "mako")[2:4]) +
+  guides(colour = guide_legend(override.aes = list(size=10))) +
+  theme(legend.position = "top") +
+  labs(title = "Smooth 0.4")
+
+p2 = ggplot(df2, aes(x, y, color = group)) +
+  ggrastr::geom_point_rast(size = 0.2) +
+  theme_nice() +
+  scale_color_manual(values = viridis(n = 5, option = "mako")[2:4]) +
+  guides(colour = guide_legend(override.aes = list(size=10))) +
+  theme(legend.position = "top") +
+  labs(title = "Smooth 0.5") 
+
+p3 = ggplot(df3, aes(x, y, color = group)) +
+  ggrastr::geom_point_rast(size = 0.2) +
+  theme_nice() +
+  scale_color_manual(values = viridis(n = 5, option = "mako")[2:4]) +
+  guides(colour = guide_legend(override.aes = list(size=10))) +
+  theme(legend.position = "top") +
+  labs(title = "Smooth 0.6")
+
+p1 + p2 + p3
+```
+
+
+NOTE:
+
+* higher smoothing leads to more distinct groups
+* I selected for smoothing level 0.6
+* Smoothing level 0.5 might also be fine
+* The smoothing defines how good the signal can be seen -> and then later classified
+ * Larger smoothing leads to less accurate peaks, but constructs can be easier clustered by their similarities/ differences
+ * Smaller smoothing leads to very accurate peaks, but differences between constructs are hard to summarize/cluster, because more variation exists
+
+\FloatBarrier
+\pagebreak
+
+# Kmeans and density-based clustering
+
+```{r, fig.width=10, fig.height=4, fig.cap="\\textbf{Kmeans clustering with 4 centroids.}"}
+set.seed(1234)
+group_par1 = kmeans(umapKCL_par3$layout, centers = 4)
+df1 = data.frame(x = umapKCL_par3$layout[,1],
+                y = umapKCL_par3$layout[,2],
+                group = factor(group_par1$cluster))
+
+p1 = ggplot(df1, aes(x, y, color = group)) +
+  geom_point(size = 0.2) +
+  theme_nice() +
+  scale_color_manual(values = viridis(n = 6, option = "mako")[2:8]) +
+  guides(colour = guide_legend(override.aes = list(size=10), nrow = 1)) +
+  theme(legend.position = "top") +
+  labs(title = "Smooth 0.6") 
+
+p2 = ggplot(df1, aes(x, y)) +
+  geom_pointdensity(size = 0.2) +
+  theme_nice() +
+  scale_color_viridis(option = "A") +
+  theme(legend.position = "top") +
+  labs(title = "Smooth 0.6") +
+    guides(color = guide_colorbar(title.position = 'top', title.hjust = 0.5,
+                                barwidth = unit(20, 'lines'), barheight = unit(.5, 'lines'))) 
+p1 + p2
+```
+
+```{r, fig.width=6, fig.height=4, fig.cap="\\textbf{K nearest neighbors plot with k=35.} K equals the MinPts option in the dbscan. Line at 0.6 represents eps param."}
+library(fpc)
+library(dbscan)
+set.seed(1234)
+dbscan::kNNdistplot(umapKCL_par3$layout, k = 35)
+abline(h = 0.6, lty = 2)
+```
+
+```{r, fig.width=12, fig.height=6, fig.cap="\\textbf{UMAP transformation with dbscan clustering; eps=0.6, MinPts=35.}"}
+group_par1 = dbscan::dbscan(umapKCL_par3$layout, eps = 0.6, minPts = 35)
+
+df1 = data.frame(x = umapKCL_par3$layout[,1],
+                 y = umapKCL_par3$layout[,2],
+                 group = factor(group_par1$cluster))
+
+p1 = ggplot(df1, aes(x, y, fill = group)) +
+  geom_point(shape = 21) +
+  theme_nice() +
+  scale_fill_viridis(option = "mako", discrete = T, direction = -1) +
+  guides(colour = guide_legend(override.aes = list(size=1), nrow = 3)) +
+  theme(legend.position = "top", aspect.ratio = 1)
+
+p2 = ggplot(df1, aes(x, y)) +
+  geom_pointdensity(size = 0.8) +
+  # ggrastr::rasterise(geom_pointdensity(size = 0.2)) +
+  theme_nice() +
+  scale_color_viridis(option = "A") +
+  theme(legend.position = "top", aspect.ratio = 1) +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = 0.5,
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) 
+
+p3 = ggplot(subset(df1, group != 0), aes(x, y, fill = group)) +
+  geom_point(shape = 21) +
+  theme_nice() +
+  scale_fill_viridis(option = "mako", discrete = T, direction = -1) +
+  guides(colour = guide_legend(override.aes = list(size=1), nrow = 3)) +
+  theme(legend.position = "top", aspect.ratio = 1)
+
+p1 + p2 + p3 + patchwork::plot_layout(guides = "collect") & theme(legend.position = "top")
+```
+
+```{r, fig.width=10, fig.height=10, fig.cap="\\textbf{Smoothed crosslink profiles split by density based clustering.}"}
+set.seed(1234)
+
+s = split.data.frame(smoothKCL_par3, group_par1$cluster)
+tmp = lapply(1:length(s), function(x){
+  z = floor(ncol(s[[1]]) / 2)
+  d = data.frame(Group = factor(rep(x, ncol(s[[x]]))),
+                 value = colMeans(s[[x]], na.rm = TRUE),
+                 pos = -z:z)
+  
+})
+df = dplyr::bind_rows(tmp, .id = "variable")
+
+ggplot(df, aes(x = pos, y = value, group = Group)) +
+  geom_line(size = 1) +
+  scale_color_viridis(option = "mako", discrete = T, direction = -1) +
+  theme_nice() +
+  theme(legend.position = "none") +
+  # guides(colour = guide_legend(override.aes = list(size=10), nrow = 1))  +
+  facet_wrap(~Group)
+
+```
+
+NOTE:
+
+* density based clustering works better than kmeans clustering
+* cluster 0 of the desnsity based clustering holds all outliers, which is why no clear peak can be seen outside of the read-through region
+* As a result of the high smoothing the resolution of the classification does not allow an accurate classification by the number of peaks
+ * less strong smoothing does solve the problem but leads to much smaller groups, since more variation is included
+
+
+\FloatBarrier
+\pagebreak
+
+# Subselection on main groups
+
+```{r, fig.width=8, fig.height=4, fig.cap="\\textbf{Number of constructs per cluster.}"}
+nClusterCutoff = 100
+
+df = table(group_par1$cluster) %>% 
+  as.data.frame()
+p1 = ggplot(df, aes(x = Var1, y = Freq)) +
+  geom_col() + 
+  coord_flip() +
+  theme_nice() +
+  theme(axis.text = element_text(size = 8) ) +
+  geom_hline(yintercept = nClusterCutoff) +
+  labs(
+    y = "Count",
+    x = "Cluster"
+  )
+
+groupSel = data.frame(group = group_par1$cluster) %>% 
+  as.data.frame() %>%
+  group_by(group) %>%
+  summarize(n = n())
+
+groupSel = groupSel$group[groupSel$n > nClusterCutoff]
+
+p2 = ggplot(df, aes(x = reorder(Var1, -Freq), y = Freq, group = 1)) +
+  geom_point() +
+  geom_line() +
+  theme_nice() +
+  geom_hline(yintercept = nClusterCutoff) +
+  labs(x = "Cluster", y = "Count") +
+  theme(axis.text = element_text(size = 8) ) 
+
+p1 + p2 
+```
+
+```{r, fig.width=10, fig.height=5, fig.cap="\\textbf{UMAP transformation with dbscan clustering on main groups.}"}
+df = data.frame(x = umapKCL_par3$layout[,1],
+                y = umapKCL_par3$layout[,2],
+                group = factor(group_par1$cluster))
+df = df[df$group != 0,]
+df1 = df[df$group %in% groupSel,]
+df2 = df[!df$group %in% groupSel,]
+
+p1 = ggplot() +
+  geom_point(data = df2, aes(x, y), fill = "white", shape = 21) +
+  geom_point(data = df1, aes(x, y, fill = group), shape = 21) +
+  theme_nice() +
+  scale_fill_npg() +
+  # scale_fill_viridis(option = "mako", discrete = T, direction = -1) +
+  guides(colour = guide_legend(override.aes = list(size=1), nrow = 3)) +
+  theme(legend.position = "top", aspect.ratio = 1) 
+
+p2 = ggplot(df1, aes(x, y)) +
+  geom_pointdensity() +
+  theme_nice() +
+  scale_color_viridis(option = "A") +
+  theme(legend.position = "top", aspect.ratio = 1) +
+    guides(color = guide_colorbar(title.position = 'top', title.hjust = 0.5,
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) 
+
+p3 = ggplot() +
+  geom_point(data = df1, aes(x, y, fill = group), shape = 21) +
+  theme_nice() +
+  scale_fill_npg() +
+  # scale_fill_viridis(option = "mako", discrete = T, direction = -1) +
+  guides(colour = guide_legend(override.aes = list(size=1), nrow = 3)) +
+  theme(legend.position = "top", aspect.ratio = 1)
+
+p1 + p2 + p3 + patchwork::plot_layout(guides = "collect") & theme(legend.position = "top")
+```
+
+```{r,fig.width=4, fig.height=6, fig.cap="\\textbf{Smoothed crosslink heatmaps split by main groups.}"}
+set.seed(1234)
+s = split.data.frame(smoothKCL_par3, group_par1$cluster)
+s = s[names(s) %in% groupSel]
+s = s[names(s) != 0]
+
+# s = sapply(s, head, n = 500)
+
+test = lapply(seq_along(s), function(x){
+  h = Heatmap(s[[x]],
+          row_title = names(s[x]), name = "Xlinks",
+          cluster_rows = FALSE, cluster_columns = FALSE, 
+          show_column_names = T, border = T, col = custom.col,
+          use_raster = TRUE, show_row_names = FALSE,
+          heatmap_legend_param = list(
+               at = c(0,0.5, 1), labels = c("0", "0.5", "1"),
+               legend_width = unit(6, "cm"),
+               title_position = "topleft", direction = "horizontal"
+             )
+  )
+  h
+})
+
+# l = test[[1]] %v% test[[2]] %v% test[[3]] %v% test[[4]] 
+# l = test[[1]] %v% test[[2]] %v% test[[3]] %v% test[[4]] %v% test[[5]] %v% test[[6]] %v% test[[7]] 
+l = test[[1]] %v% test[[2]] %v% test[[3]] %v% test[[4]] %v% test[[5]] %v% test[[6]] %v% test[[7]]  %v% test[[8]]  %v% test[[9]]  %v% test[[10]] 
+draw(l, heatmap_legend_side = "bottom")
+```
+
+```{r, fig.width=10, fig.height=4, fig.cap="\\textbf{Smoothed crosslink profiles split by main groups.}"}
+set.seed(1234)
+
+s = split.data.frame(smoothKCL_par3, group_par1$cluster)
+tmp = lapply(1:length(s), function(x){
+  # z = floor(ncol(s[[1]]) / 2)
+  z = ncol(s[[1]])
+  d = data.frame(Group = factor(rep(x, ncol(s[[x]]))),
+                 value = colMeans(s[[x]], na.rm = TRUE),
+                 pos = 1:z)
+  
+})
+df = dplyr::bind_rows(tmp, .id = "variable")
+df = df[df$Group %in% groupSel,]
+df = df[df$Group != 0,]
+
+ggplot(df, aes(x = pos, y = value, color = Group, group = Group)) +
+  geom_line(size = 1) +
+  scale_color_npg() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  facet_wrap(~Group, ncol = 5)
+
+```
+
+NOTE:
+
+* Very few groups contain most of the constructs
+* These main groups show a broad spread of shapes
+ * Most different are groups 5,6 with a large peak at the read-through region and only small peaks in the rest of the construct
+ * All other groups contain major peaks outside of the read-through part and are different in terms of the location of these peaks
+
+
+\FloatBarrier
+\pagebreak
+
+# Example profiles for each main group
+
+```{r, fig.width=10, fig.height=10, fig.cap="\\textbf{Example profiles for each main cluster - smoothed.}"}
+set.seed(1234)
+idx = sample(1:100, 6)
+
+sSel = s[names(s) %in% groupSel]
+sSel = sSel[names(sSel) != 0]
+tmp = lapply(sSel, function(x) {
+  # x = sSel$`1`
+  xx = x[idx,] %>%
+    as.data.frame() %>%
+    tibble::rownames_to_column("constructID") %>%
+    pivot_longer(-constructID) %>%
+    mutate(pos = rep(1:399,6))
+    # mutate(pos = rep(-199:199,6))
+  return(xx)
+})
+df = dplyr::bind_rows(tmp, .id = "Group")
+df = df %>% unite("BothLabels", Group, constructID, sep = "_", remove = FALSE)
+df$BothLabels = factor(df$BothLabels)
+x = levels(df$BothLabels)
+df$BothLabels = factor(df$BothLabels, levels = x[order(nchar(x),x)])
+
+ggplot(df, aes(x = pos, y = value, color = Group)) +
+  geom_line(size = 1) +
+  scale_color_npg() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  facet_wrap(~BothLabels, ncol = 6) +
+  theme(
+  strip.background = element_blank(),
+  # axis.text = element_text(size = 6)
+  strip.text.x = element_text(size = 8)
+)
+```
+
+```{r, fig.width=10, fig.height=10, fig.cap="\\textbf{Example profiles for each main cluster - normalized}"}
+tmp = normKCL[rownames(normKCL) %in% unique(df$constructID),] %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("constructID") %>%
+  pivot_longer(-constructID) 
+
+idx = match(tmp$constructID, df$constructID)
+tmp$Group = df$Group[idx]
+tmp$BothLabels = df$BothLabels[idx]
+# tmp$pos = rep(-99:100,6*(length(groupSel)-1))
+tmp$pos = rep(1:200,6*(length(groupSel)-1))
+
+ggplot(tmp, aes(x = pos, y = value, color = Group)) +
+  geom_line(size = 1) +
+  scale_color_npg() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  facet_wrap(~BothLabels, ncol = 6) +
+  theme(
+  strip.background = element_blank(),
+  # axis.text = element_text(size = 6),
+  strip.text.x = element_text(size = 8)
+)
+```
+
+```{r, fig.width=10, fig.height=10, fig.cap="\\textbf{Example profiles for each main cluster - raw}"}
+tmp = masterMatrKCL[rownames(masterMatrKCL) %in% unique(df$constructID),] %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("constructID") %>%
+  pivot_longer(-constructID) 
+
+idx = match(tmp$constructID, df$constructID)
+tmp$Group = df$Group[idx]
+tmp$BothLabels = df$BothLabels[idx]
+# tmp$pos = rep(-99:100,6*(length(groupSel)-1))
+tmp$pos = rep(1:200,6*(length(groupSel)-1))
+
+ggplot(tmp, aes(x = pos, y = value, color = Group)) +
+  geom_line(size = 1) +
+  scale_color_npg() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  facet_wrap(~BothLabels, ncol = 6, scales = "free_y") +
+  theme(
+  strip.background = element_blank(),
+  axis.text = element_text(size = 6),
+  strip.text.x = element_text(size = 8)
+)
+```
+
+NOTE:
+
+* Min-max normalization does not alter the relative hight of the peaks
+* Smoothing strongly influences how the signal is distributed of the construct
+ * the read-through part for example get summarized to a ~50nt wide peak region
+* But still the smoothed signal does follow the raw signal
+
+\FloatBarrier
+\pagebreak
+
+# G4 strength on construts of main groups
+
+```{r, fig.width=8, fig.height=5, fig.cap="\\textbf{UMAP transformation of clustered groups colored by KCL to total ratio (G4 peak strength).} The G4 strenght per construct is represented as the maximum of its G4 peaks."}
+df = data.frame(x = umapKCL_par3$layout[,1],
+                y = umapKCL_par3$layout[,2],
+                group = factor(group_par1$cluster))
+df = df[df$group != 0,]
+df$constructID = rownames(df)
+
+
+
+dfG4Peaks = G4Peaks %>%
+  as.data.frame() %>%
+  group_by(constructID) %>%
+  summarize(max_GTP_KCL_ratio = max(GTP_KCL_ratio),
+            max_GTP_NACL_ratio = max(GTP_NACL_ratio),
+            GTP_KCL_total, max_log2FoldChange = max(log2FoldChange))
+
+idx = match(df$constructID, dfG4Peaks$constructID)
+df$max_GTP_KCL_ratio = dfG4Peaks$max_GTP_KCL_ratio[idx]
+df$max_GTP_NACL_ratio = dfG4Peaks$max_GTP_NACL_ratio[idx]
+df$GTP_KCL_total = dfG4Peaks$GTP_KCL_total[idx]
+df$max_log2FoldChange = dfG4Peaks$max_log2FoldChange[idx]
+
+q = quantile(df$max_GTP_KCL_ratio, seq(0,1, by = 0.1))
+df$bins = as.factor(findInterval(df$max_GTP_KCL_ratio, q, all.inside = TRUE))
+
+df1 = df[df$group %in% groupSel,]
+df2 = df[!df$group %in% groupSel,]
+
+p1 = ggplot() +
+  geom_point(data = df, aes(x, y, color = max_GTP_KCL_ratio),  size = 0.8) +
+  theme_nice() +
+  scale_color_viridis(option = "A") +
+  theme(legend.position = "top", aspect.ratio = 1) +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = 0.5,
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) +
+  labs(title = "All groups")
+
+p2 = ggplot() +
+  geom_point(data = df1, aes(x, y, color = max_GTP_KCL_ratio), size = 0.8) +
+  theme_nice() +
+  scale_color_viridis(option = "A") +
+  theme(legend.position = "top", aspect.ratio = 1) +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = 0.5,
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) +
+  labs(title = "Main groups")
+
+(p1 + p2) 
+```
+
+```{r, fig.width=8, fig.height=5, fig.cap="\\textbf{UMAP transformation of clustered groups colored by NACL to total ratio.} The ratio per construct is represented as the maximum of its G4 peaks."}
+p1 = ggplot() +
+  geom_point(data = df, aes(x, y, color = max_GTP_NACL_ratio),  size = 0.8) +
+  theme_nice() +
+  scale_color_viridis(option = "A") +
+  theme(legend.position = "top", aspect.ratio = 1) +
+    guides(color = guide_colorbar(title.position = 'top', title.hjust = 0.5,
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) +
+  labs(title = "All groups")
+
+p2 = ggplot() +
+  geom_point(data = df1, aes(x, y, color = max_GTP_NACL_ratio), size = 0.8) +
+  theme_nice() +
+  scale_color_viridis(option = "A") +
+  theme(legend.position = "top", aspect.ratio = 1) +
+    guides(color = guide_colorbar(title.position = 'top', title.hjust = 0.5,
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) +
+  labs(title = "Main groups")
+(p1 + p2) 
+```
+
+```{r, fig.width=10, fig.height=4, fig.cap="\\textbf{G4 strength per cluster group.} Each box contains the indicated values for each construt. Boxes are separated by the indicated cluster group"}
+library(forcats)
+df1$group = droplevels.factor(df1$group)
+
+p1 = ggplot(df1, aes(x = reorder(group,-max_GTP_KCL_ratio, na.rm = TRUE), y = max_GTP_KCL_ratio, fill = group)) +
+  geom_boxplot() +
+  scale_fill_npg() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  labs(x = "Cluster group")
+
+p2 = ggplot(df1, aes(x = reorder(group,-max_GTP_KCL_ratio, na.rm = TRUE), y = log2(GTP_KCL_total), fill = group)) +
+  geom_boxplot() +
+  scale_fill_npg() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  labs(x = "Cluster group")
+
+p3 = ggplot(df1, aes(x = reorder(group,-max_GTP_KCL_ratio, na.rm = TRUE), y = max_log2FoldChange, fill = group)) +
+  geom_boxplot() +
+  scale_fill_npg() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  labs(x = "Cluster group")
+
+p1 + p2 + p3 
+```
+
+NOTE:
+
+* Cluster groups 1,4,5 show by far the lowest KCL ratio -> consist of constructs with weak G4s
+ * these groups show the majority of the signal at the read-through part of the construct
+* Cluster group 5 shows the highest overall read coverage -> this is why these constructs have significant G4s.
+ * small changes can be detected if the read signal/ statistical power is high
+ * Yet they have the samllest log2 fold-change
+
+
+\FloatBarrier
+\pagebreak
+
+# Session Information
+
+```{r, session_info, include=TRUE, echo=TRUE, results='markup'}
+sessionInfo()
+```
