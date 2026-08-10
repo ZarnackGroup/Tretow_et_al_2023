@@ -1,0 +1,1703 @@
+---
+title: "HNRNPH RTstop sites - G4 sensitive constructs"
+author: "Mirko Brueggemann"
+date: "`r format(Sys.time(), '%B %e, %Y')`"
+output:
+  bookdown::pdf_document2:
+    fig_caption: yes
+    keep_tex: yes
+  html_document:
+    df_print: paged
+  pdf_document: default
+graphics: yes
+geometry: margin=1in
+fontsize: 11pt
+header-includes:
+- \usepackage{placeins}
+---
+
+```{r knitr off, echo=FALSE, message=FALSE,cache=FALSE, results="hide", render=FALSE ,warning=FALSE}
+knitr::opts_chunk$set(echo=FALSE, error=FALSE, warning=FALSE,message=FALSE)
+```
+
+
+# Analysis Description
+
+This analysis is based on the G4 peaks defined in the RTstop site report. We expect some of these peaks to change in their strength depending on the presence of NaCl or KCl. KCl is meant to stabilize G4 formation, therefore peaks should mostly go up when comparing to NaCl. Here we want to test which G4 peaks are sensitive for KCl and which are not. 
+
+```{r,loadLibs}
+### ============================================================================
+### Load Packages
+### ----------------------------------------------------------------------------
+### 
+library(rtracklayer)
+library(GenomicRanges)
+library(ggplot2)
+library(AnnotationDbi)
+library(dplyr)
+library(reshape2)
+library(UpSetR)
+library(GenomicFeatures)
+library(kableExtra)
+library(knitr)
+library(ggrepel)
+library(gridExtra)
+library(grid)
+library(viridis)
+library(ComplexHeatmap)
+library(forcats)
+library(ggtext)
+library(patchwork)
+library(ggforce)
+library(ggpointdensity)
+library(knitr)
+library(tidyr)
+library(ggsci)
+library(DESeq2)
+library(edgeR)
+library(ggrastr)
+library(ggnewscale)
+library(BindingSiteFinder)
+```
+
+```{r}
+myGrey = "#808080"
+# Define plotting theme
+theme_nice <- function(size = 12) {
+    baseSize = size
+    largeSize = size + 2
+    smallSize = size - 2
+    theme_bw() +
+        theme(axis.text = element_text(size = smallSize, color = "black"),
+              axis.title = element_text(size = baseSize, color = "black"),
+              strip.text.x = element_text(size = baseSize, color = "black"),
+              ## legend
+              legend.text = element_text(size = baseSize, color = "black"),
+              legend.title = element_text(size = baseSize, color = "black"),
+              ## title
+              title = element_text(size = largeSize, color = "black"),
+              plot.title = element_text(size = largeSize, color = "black"),
+              plot.subtitle = element_text(size = smallSize, color = "black"),
+              plot.title.position = 'plot',
+              ## caption
+              plot.caption = element_text(hjust = 0,
+                                          face= "italic", size = smallSize),
+              plot.caption.position = "plot",
+        )
+}
+
+
+theme_nice_pie <- function(size = 12) {
+    baseSize = size
+    largeSize = size + 2
+    smallSize = size - 2
+    theme_void() +
+        theme(## legend
+              legend.text = element_text(size = baseSize),
+              legend.title = element_text(size = baseSize),
+              ## title
+              title = element_text(size = largeSize),
+              plot.title = element_text(size = largeSize),
+              plot.subtitle = element_text(size = smallSize),
+              plot.title.position = 'plot',
+              ## caption
+              plot.caption = element_text(hjust = 0,
+                                          face= "italic", size = smallSize),
+              plot.caption.position = "plot",
+        )
+}
+
+theme_pub <- function(){
+  theme_nice() + 
+  theme(axis.text = element_text(size = 6),
+        axis.title = element_text(size = 8),
+        title = element_text(size = 10),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        plot.title = element_text(size = 10),
+        strip.text.x = element_text(size = 8))
+} 
+
+theme_md <- function() {
+  theme(              ## nicer text formatting
+              plot.title = ggtext::element_markdown(),
+              plot.caption = ggtext::element_markdown(),
+              plot.subtitle = ggtext::element_markdown(),
+              axis.title.x = ggtext::element_markdown(),
+              axis.title.y = ggtext::element_markdown())
+}
+```
+
+# Merge KCl and NaCl peaks
+
+Initially peaks were called separately on each condition, KCl and NaCl. Here I combined both sets of peaks. To keep the desired width of 3nt I applied the merge and re-size routine on all peak midpoints. This essentially uses the combined coverage of all replicates in both conditions to decide on the center of any peak region that only partially overlaps in the two sets. In the end I annotate for each peak if it was seen in NaCl, KCl or both. 
+
+```{r}
+# load data
+# constructInfo = readRDS("../rds/construct.information.df.rds")
+constructInfo = readRDS("../rds/constructInformation.rds")
+constructInfo = constructInfo[!grepl("Spike",constructInfo$Region.ID),]
+constructSignal = readRDS("../rds/RTstop.profiling.l.rds")
+# load KCl sites
+load("../01_BindingSites/condition_kcl/mean_cl1/data/sitesReproducible.rda")
+name = paste0(seqnames(sitesReproducible), "_", unlist(sapply(runLength(seqnames(sitesReproducible)), seq)))
+names(sitesReproducible) = name
+seqlevels(sitesReproducible) <- as.character(sprintf("%05d", 1:12000))
+peaksKCL = sitesReproducible
+# load NaCl sites
+load("../01_BindingSites/condition_nacl/data/sitesReproducible.rda")
+name = paste0(seqnames(sitesReproducible), "_", unlist(sapply(runLength(seqnames(sitesReproducible)), seq)))
+names(sitesReproducible) = name
+seqlevels(sitesReproducible) <- as.character(sprintf("%05d", 1:12000))
+peaksNACL = sitesReproducible
+# resize bs to their center and combine over conditions
+peaks = unique(c(resize(peaksKCL, fix = "center", width = 1),
+                   resize(peaksNACL, fix = "center", width = 1)))
+```
+
+```{r, fig.width=3, fig.height=4, fig.cap="\\textbf{Peak size distribution after merging of NaCl and KCl peaks.}"}
+# visualize the overlap shift when combining both peak sets
+df = as.data.frame(table(width(reduce(c(peaksKCL, peaksNACL)))))
+df$Var1 = factor(df$Var1, levels = rev(c(df$Var1)))
+ggplot(df, aes(x = Var1, y = Freq)) +
+  geom_col(fill = "darkgrey") +
+  geom_text(aes(y = 1, label = format(Freq, big.mark = ".")), hjust = "left") +
+  scale_y_log10(breaks = c(0,1,10,100,1000,10000)) +
+  coord_flip() +
+  theme_nice() +
+  labs(x = "Peak size", 
+       y = "Number of peaks")
+```
+
+```{r, mergePeakConditions}
+# prepare BSF data object
+meta = data.frame(id = 1:6, condition = c(rep("GTP_KCL",3), rep("GTP_NACL", 3)))
+sgn = list(signalPlus = constructSignal[1:6], signalMinus = constructSignal[7:12])
+names(sgn$signalPlus) = paste0(meta$id, "_", meta$condition)
+bds = BSFDataSet(ranges = peaks, meta = meta, signal = sgn)
+# Final binding site settings
+bdsMerge <- makeBindingSites(object = bds, bsSize = 3, minWidth = 0,
+                        minCrosslinks = 2, minClSites = 1, centerIsSummit = FALSE)
+df = getSummary(bdsMerge)
+df = format(df, big.mark = ".", decimal.mark = ",")
+kable(df, "latex", caption = "Merge and combine", booktabs = TRUE) 
+```
+
+```{r, fig.width=4, fig.height=4, fig.cap="\\textbf{Overlap between NaCl and KCl peaks.} Overlaps were computed after resolving partial overlaps."}
+rng = BindingSiteFinder::getRanges(bdsMerge)
+r1 = resize(peaksKCL, fix = "center", width = 1)
+r2 = resize(peaksNACL, fix = "center", width = 1)
+
+df = data.frame(olKCL = countOverlaps(rng, r1),
+                olNACL = countOverlaps(rng, r2))
+m = make_comb_mat(df)
+
+ha = HeatmapAnnotation(
+  "Intersections" = anno_barplot(comb_size(m),
+                                 border = FALSE,
+                                 gp = gpar(fill = "#a6a6a6"),
+                                 height = unit(6, "cm"))
+)
+ha2 = HeatmapAnnotation(
+  "set sizes" = anno_barplot(set_size(m),
+                             border = FALSE,
+                             gp = gpar(fill = "#a6a6a6"),
+                             width = unit(4, "cm")),
+  which = "row"
+)
+
+ht = UpSet(m,
+           comb_order = order(comb_size(m), decreasing = T),
+           top_annotation = ha,
+           right_annotation = ha2,
+           comb_col = "#003399", bg_col = "white", pt_size = unit(.5, "cm") ,
+           border = T, lwd = 2, bg_pt_col = "#a6a6a6"
+)
+
+ss = set_size(m)
+cs = comb_size(m)
+ht = draw(ht,  padding = unit(c(0, 0, 10, 0), "mm"))
+od = column_order(ht)
+decorate_annotation("Intersections", {
+  grid.text(format(cs[od], big.mark = ".", decimal.mark = ","),
+            x = seq_along(cs), y = unit(cs[od], "native") + unit(.1, "pt"), 
+            default.units = "native", just = c("left", "bottom"), 
+            gp = gpar(fontsize = 8, col = "black"), rot = 45)
+})
+```
+
+```{r, exportMergedPeaks}
+# annotate with condition support
+mcols(rng) = cbind(mcols(rng), df)
+peaks_all = rng
+
+name = paste0(seqnames(peaks_all), "_", unlist(sapply(runLength(seqnames(peaks_all)), seq)))
+names(peaks_all) = name
+seqlevels(peaks_all) <- as.character(sprintf("%05d", 1:12000))
+
+# export
+rtracklayer::export(rng, 
+       "peaks_all.bed",
+       format = "BED", 
+       trackLine = new("BasicTrackLine",
+                       name = "GTP-KCl+NaCl peaks",
+                       description = "Merged 3nt RTstop peaks, reproducible in all 3 replicates per condition, partial-overlap resolved.") )
+save(rng, file = "peaks_all.rda")
+```
+
+
+\FloatBarrier
+\pagebreak
+
+# Construct epxression
+
+Constructs with in general low counts were removed from the differential analysis, because for these we don't have the count power to tell if they are sensitive to KCl or not. In order to do so, counts per construct were normalized to library size with DESeq2 and only constructs with at least 100 normalized counts from all 6 samples were retained. 
+
+```{r, fig.width=8, fig.height=6, fig.cap="\\textbf{Global expression.} Counts were normalized for library size with DESeq. These were summed up per construct and sorted by their rank. Only constructs with at least 100 normalized counts in all 6 samples are considered sufficiently large expressed. "}
+m = sapply(constructSignal, sum) %>%
+  as.data.frame() %>% 
+  dplyr::select(1:6)
+
+meta = data.frame(id = 1:6, condition = c(rep("GTP_KCL",3), rep("GTP_NACL", 3)))
+dds = DESeqDataSetFromMatrix(countData = m, colData = meta, design = ~1)
+dds = estimateSizeFactors(dds)
+normCounts = counts(dds, normalized = TRUE)
+
+df = normCounts %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column() %>%
+  pivot_longer(-rowname) %>% 
+  group_by(name) %>% 
+  mutate(rank = rank(value, ties.method = "first"))
+
+ggplot(df, aes(x = rank, y = value)) +
+  ggrastr::rasterise(geom_pointdensity(), dpi = 300) +
+  facet_wrap(~name) +
+  theme_nice() +
+  geom_hline(yintercept = 100, linetype = "dashed") +
+  scale_y_log10() +
+  scale_color_viridis(option = "rocket") +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = 0.5,
+                                barwidth = unit(20, 'lines'), barheight = unit(.5, 'lines'))) +
+  labs(x = "Rank",
+       y = "Normalized counts")
+
+const_Expressed = as.data.frame(table(df$rowname[df$value >= 100]))
+const_Expressed = const_Expressed$Var1[const_Expressed$Freq == 6]
+```
+
+```{r}
+# ------------------------------------------------------------------------------
+# Exclude all not high enough expressed constructs
+# ------------------------------------------------------------------------------
+const_All = levels(seqnames(peaks_all))
+const_notExpressed = const_All[!const_All %in% const_Expressed]
+
+# allConstIDs = levels(seqnames(peaksCombined))
+# constTrack_notExpressed = allConstIDs[!allConstIDs %in% constructExpressed]
+
+# ------------------------------------------------------------------------------
+# Exclude all constructs with high enough expression only in the read-through region
+# -> no peak was called on these
+# ------------------------------------------------------------------------------
+const_withPeak = unique(seqnames(peaks_all))
+const_onlyReadThroughSignal = const_Expressed[!const_Expressed %in% const_withPeak]
+const_ExpressedAndPeak = const_Expressed[!const_Expressed %in% const_onlyReadThroughSignal]
+
+peaks_expressed = peaks_all[seqnames(peaks_all) %in% const_ExpressedAndPeak]
+
+# constructWithPeak = unique(seqnames(peaksCombined))
+# constTrack_onlyReadThroughSignal = constructExpressed[!constructExpressed %in% constructWithPeak]
+# constructExpressedAndPeak = constructExpressed[!constructExpressed %in% constTrack_onlyReadThroughSignal]
+```
+
+
+```{r, fig.width=6, fig.height=3, fig.cap="\\textbf{Comparisson of all peaks and constructs vs. only those peaks on constructs considered expressed., eval=FALSE}"}
+df = data.frame(peaks_expressed = length(peaks_expressed),
+                peaks_all = length(peaks_all)) %>%
+  pivot_longer(everything())
+
+ggplot(df, aes(x = name, y = value)) +
+  geom_col(fill = "darkgrey") +
+  geom_text(aes(y = 1, label = format(value, big.mark = ".")), hjust = "left") +
+  coord_flip() +
+  theme_nice() +
+  labs(x = "Peak set",
+       y = "Number of peaks in set")
+```
+
+```{r, fig.width=6, fig.height=6, fig.cap="\\textbf{Peaks per expressed construct.}", eval=FALSE}
+p1 = as.factor(table(seqnames(peaks_expressed[peaks_expressed$olKCL == 1])))
+p1 = fct_lump_n(p1, n = 6) 
+p2 = as.factor(table(seqnames(peaks_expressed[peaks_expressed$olNACL == 1])))
+p2 = fct_lump_n(p2, n = 6) 
+
+df1 = data.frame(const = names(p1), n = p1, condition = "KCl")
+df2 = data.frame(const = names(p2), n = p2, condition = "NaCl")
+
+df = rbind(df1,df2)
+# df$n = fct_rev(df$n)
+
+ggplot(df, aes(x = n, fill = condition)) +
+  geom_bar(color = "black", position = "dodge") +
+  theme_nice() +
+  # coord_flip() +
+  scale_fill_brewer(palette = 1) +
+  theme(legend.position = "top") +
+  scale_x_discrete(labels = (c("0", "1", "2", "3", "4", "5", ">5"))) +
+  stat_count(geom = "text", colour = "black", size = 3.5,
+  aes(label = ..count..), position=position_dodge(width = 1), hjust = "middle", vjust = "top") +
+  labs(x = "Number of peaks",
+       y = "Number of constructs")
+```
+
+```{r, eval=FALSE}
+l = list(setKCL = as.character(seqnames(peaks_expressed[peaks_expressed$olKCL == 1])),
+         setNACL = as.character(seqnames(peaks_expressed[peaks_expressed$olNACL == 1]))
+)
+l = list_to_matrix(l)
+m = make_comb_mat(l)
+
+ha = HeatmapAnnotation(
+  "Intersections" = anno_barplot(comb_size(m),
+                                 border = FALSE,
+                                 gp = gpar(fill = "#a6a6a6"),
+                                 height = unit(6, "cm"))
+)
+ha2 = HeatmapAnnotation(
+  "set sizes" = anno_barplot(set_size(m),
+                             border = FALSE,
+                             gp = gpar(fill = "#a6a6a6"),
+                             width = unit(4, "cm")),
+  which = "row"
+)
+
+ht = UpSet(m,
+           comb_order = order(comb_size(m), decreasing = T),
+           top_annotation = ha,
+           right_annotation = ha2,
+           comb_col = "#003399", bg_col = "white", pt_size = unit(.5, "cm") ,
+           border = T, lwd = 2, bg_pt_col = "#a6a6a6"
+)
+
+ss = set_size(m)
+cs = comb_size(m)
+ht = draw(ht,  padding = unit(c(0, 0, 10, 0), "mm"))
+od = column_order(ht)
+decorate_annotation("Intersections", {
+  grid.text(format(cs[od], big.mark = ".", decimal.mark = ","),
+            x = seq_along(cs), y = unit(cs[od], "native") + unit(.1, "pt"), 
+            default.units = "native", just = c("left", "bottom"), 
+            gp = gpar(fontsize = 8, col = "black"), rot = 45)
+})
+```
+
+\FloatBarrier
+\pagebreak
+
+# Differentially regulated peaks between NaCl and KCl
+
+To compute fold-changes per peak for each construct between the NaCl and KCl condition I used a DESeq2 based approach. In order to remove the bias of constructs that strongly change in their expression between the conditions, I used a modified DESeq2 test. I specifically tested for those constructs that significantly change less than a log2 fold-change of 1 (less than 2-fold), using the paramteter altHypothesis = "lessAbs" and an lfcThreshold = 1 in the results function. This results in all constructs that are affected by a less than 2-fold global change between conditions. This was followed by a second round of DESeq2 on peak level for all peaks on constructs without major global changes. Here I now test for each peak if counts are different between NaCl and KCl (contrast = c("condition", "GTP_KCL", "GTP_NACL")). 
+
+```{r, calcSimple}
+# count signal in BS
+bds = setRanges(bds, peaks_expressed)
+cov = coverageOverRanges(bds, returnOptions = "merge_positions_keep_replicates")
+m = mcols(cov)
+# rownames(m) = seqnames(cov)
+# names(cov) = seqnames(cov) #TODO added this
+
+se = SummarizedExperiment(assays = list(counts = as.matrix(m)), 
+                          rowRanges = granges(cov), colData = meta)
+# Run DESEQ
+dds = DESeqDataSet(se, design = ~ condition)
+dds = DESeq(dds)
+resSimple = lfcShrink(dds, contrast = c("condition", "GTP_KCL", "GTP_NACL"), type = "ashr")
+resSimple = resSimple %>% 
+  as.data.frame() %>%
+  mutate(sig = ifelse(padj < 0.05, TRUE, FALSE))
+idx = match(rownames(resSimple), names(cov))
+resSimple$constructID = as.character(seqnames(cov))[idx]
+```
+
+```{r, calcGloabl}
+m = sapply(constructSignal, sum) %>%
+  as.data.frame() %>%
+  dplyr::select(c(1:6))
+
+m = m[rownames(m) %in% unique(seqnames(peaks_expressed)),]
+
+dds = DESeqDataSetFromMatrix(countData = m, colData = meta, design = ~condition)
+dds = DESeq(dds)
+resGlobalNot = results(dds, contrast = c("condition", "GTP_KCL", "GTP_NACL"), altHypothesis = "lessAbs", lfcThreshold = 1)
+resGlobalNot = resGlobalNot %>% 
+  as.data.frame() %>%
+  mutate(sig = ifelse(padj < 0.05, TRUE, FALSE))
+
+const_globalLarge = rownames(resGlobalNot[resGlobalNot$sig == FALSE,])
+const_globalSmall = rownames(resGlobalNot[resGlobalNot$sig == TRUE,])
+
+peaks_globalLarge = peaks_expressed[seqnames(peaks_expressed) %in% const_globalLarge]
+peaks_globalSmall = peaks_expressed[seqnames(peaks_expressed) %in% const_globalSmall]
+```
+
+```{r, fig.height=6, fig.width=12, fig.cap="\\textbf{Constructs that do not change more than 2-fold globaly. } Constructs are tested for an absolute global fold change to be less than 2-fold (LFC=1). Significant constructs do not change more than 2-fold on the total construct level."}
+df = resGlobalNot
+df$sig = ifelse(df$padj < 0.05, TRUE, FALSE)
+
+p1 = ggplot(df, aes(x = sig)) +
+  geom_bar() +
+  theme_nice()
+
+p2 = ggplot(df, aes(x = log2FoldChange)) +
+  geom_histogram(bins = 100) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  theme_nice() +
+  geom_vline(xintercept = -1, linetype = "dashed") +
+  geom_vline(xintercept = 1, linetype = "dashed") 
+
+p3 = ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(data = subset(df, sig == FALSE), aes(x = log2(baseMean), y = log2FoldChange), color = "#737373") +
+  ggrastr::rasterise(geom_pointdensity(data = subset(df, sig == TRUE), aes(x = log2(baseMean), y = log2FoldChange)), dpi = 300) +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = .5,
+                                barwidth = unit(15, 'lines'), barheight = unit(.5, 'lines'))) 
+
+p1 + p2 + p3
+```
+
+```{r,fig.width=8, fig.height=4, fig.cap="\\textbf{Significant peaks on constructs that change/ do not change globally.}"}
+df = resSimple
+df$support = ifelse(peaks_expressed$olKCL == 1 & peaks_expressed$olNACL == 1, "both", 
+                     ifelse(peaks_expressed$olKCL == 1, "KCl", "NaCl"))
+idx = match(df$constructID, rownames(resGlobalNot))
+df$GlobalNotSig = resGlobalNot$sig[idx]
+
+df = df %>% dplyr::select(sig, GlobalNotSig, support)
+
+df$constChange = ifelse(df$GlobalNotSig == TRUE, "Not changed", "Changed")
+
+p1 = ggplot(df, aes(x = constChange, fill = sig)) +
+  geom_bar(position = "dodge") +
+  facet_wrap(~support) +
+  theme_nice() +
+  theme(legend.position = "top") +
+  labs(x = "Global construct change",
+       y = "Number of peaks",
+       fill = "Significance of peaks") +
+  scale_fill_npg() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+tmp = table(df$sig, df$constChange, df$support) %>% 
+  as.data.frame() %>%
+  group_by(Var2, Var3) %>% 
+  mutate(s = sum(Freq)) %>%
+  mutate(per = (Freq/s) * 100)
+
+p2 = ggplot(tmp, aes(x = Var2, y = per, fill = Var1)) +
+  geom_col() +
+  facet_wrap(~Var3) +
+  theme_nice() +
+  theme(legend.position = "top") +
+  labs(x = "Global construct change",
+       y = "Percentage",
+       fill = "Significance of peaks") +
+  scale_fill_npg() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+p1 + p2 + patchwork::plot_layout(guides = "collect") & theme(legend.position = "top") 
+```
+
+NOTE:
+
+* among the constructs that significantly changed globally about 80% of the individual peaks were also significant in the KCL condition
+* These peaks are likely to be called significant, because of the underlying global transcript level change between KCL and NACL
+
+```{r, fig.height=6, fig.width=10, fig.cap="\\textbf{Peak fold-changes without correction, on unchanged constructs.} Plots show the relationship of computed fold-change with the underlying expression strength (MA-plot) and the statistical significance in form of the adjusted P value (volcano-plot)."}
+resChange = resSimple[resSimple$constructID %in% const_globalSmall,]
+
+df = resChange
+
+dfTopUp = df %>% 
+  subset(sig == TRUE) %>% 
+  arrange(desc(log2FoldChange)) %>% 
+  head(n = 10)
+
+dfTopDown = df %>% 
+  subset(sig == TRUE) %>% 
+  arrange((desc(log2FoldChange))) %>% 
+  tail(n = 10)
+
+p1 = ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(data = subset(df, sig == FALSE), aes(x = log2(baseMean), y = log2FoldChange), color = "#737373") +
+  ggrastr::rasterise(geom_pointdensity(data = subset(df, sig == TRUE), aes(x = log2(baseMean), y = log2FoldChange), size = 0.5), dpi = 300) +
+  geom_point(data = dfTopUp, aes(x = log2(baseMean), y = log2FoldChange), shape = 21, color = "red", size = 3) +
+  geom_point(data = dfTopDown, aes(x = log2(baseMean), y = log2FoldChange), shape = 21, color = "red", size = 3) +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = .5,
+                                barwidth = unit(15, 'lines'), barheight = unit(.5, 'lines'))) +
+  geom_text_repel(data = dfTopUp,
+                  aes(x = log2(baseMean), y = log2FoldChange, label = rownames(dfTopUp)),
+                  box.padding = 0.5, max.overlaps = Inf, force_pull = 0,
+                  nudge_y = 12, direction = "x", angle = 90, hjust = 0,segment.size = 0.2) +
+  geom_text_repel(data = dfTopDown,
+                  aes(x = log2(baseMean), y = log2FoldChange, label = rownames(dfTopDown)),
+                  box.padding = 0.5, max.overlaps = Inf, force_pull = 0,
+                  nudge_y = -10, direction = "x", angle = 90, hjust = 0, segment.size = 0.2) +
+  ylim(-10,12) +
+  theme(aspect.ratio = 1)
+
+p2 = ggplot() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_point(data = subset(df, sig == FALSE), aes(x = log2FoldChange, y = -log10(padj)), color = "#737373") +
+  ggrastr::rasterise(geom_pointdensity(data = subset(df, sig == TRUE), aes(x = log2FoldChange, y = -log10(padj)), size = 0.5), dpi = 300) +
+  geom_point(data = dfTopUp, aes(x = log2FoldChange, y = -log10(padj)), shape = 21, color = "red", size = 3) +
+  geom_point(data = dfTopDown, aes(x = log2FoldChange, y = -log10(padj)), shape = 21, color = "red", size = 3) +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = .5,
+                                barwidth = unit(15, 'lines'), barheight = unit(.5, 'lines'))) +
+  geom_text_repel(data = dfTopUp,
+                  aes(x = log2FoldChange, y = -log10(padj), label = rownames(dfTopUp)),
+                  box.padding = 0.5, max.overlaps = Inf, force = 0.5,
+                  nudge_y = 0, nudge_x = 12, direction = "y", angle = 0, hjust = 0,  segment.size = 0.2) +
+  geom_text_repel(data = dfTopDown,
+                  aes(x = log2FoldChange, y = -log10(padj), label = rownames(dfTopDown)),
+                  box.padding = 0.5, max.overlaps = Inf, force = 0.5,
+                  nudge_y = 0, nudge_x = -10, direction = "y", angle = 0, hjust = 0,  segment.size = 0.2) +
+  xlim(-10,12) +
+  theme(aspect.ratio = 1)
+
+p1 + p2
+```
+
+```{r, fig.width=12, fig.height=4, fig.cap="\\textbf{MA and volcano variations}"}
+# MA-Plot variations
+dfUpper = df %>% select(baseMean, log2FoldChange, sig)%>%
+  filter(log2FoldChange > 0, sig == T) %>%
+  mutate(bm2 = round(log2(baseMean))) %>%
+  group_by(bm2) %>%
+  summarise(mlfc = min(log2FoldChange)) %>%
+  filter(bm2 < 8 & bm2 > 1)
+
+dfLower = df %>% select(baseMean, log2FoldChange, sig)%>%
+  filter(log2FoldChange < 0, sig == T) %>%
+  mutate(bm2 = round(log2(baseMean))) %>%
+  group_by(bm2) %>%
+  summarise(mlfc = max(log2FoldChange)) %>%
+  filter(bm2 < 8 & bm2 > 1)
+
+p1 = ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  rasterise(geom_point(data = df, aes(x = log2(baseMean), y = log2FoldChange, color = sig), size = 0.5), dpi = 300) +
+  scale_color_npg() +
+  theme_nice() +
+  theme(aspect.ratio = 1) +
+  theme(legend.position = "top")
+
+p2 = ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  rasterise(geom_pointdensity(data = df, aes(x = log2(baseMean), y = log2FoldChange), adjust = 5,  size = 0.5), dpi = 300) +
+  scale_color_viridis(option = "mako") +
+  theme_nice() +
+  theme(aspect.ratio = 1) + 
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = .5,
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) +
+  geom_line(data = dfUpper, aes(x = (bm2), y = mlfc), color = "red") +
+  geom_line(data = dfLower, aes(x = (bm2), y = mlfc), color = "red") +
+  theme(legend.position = "top") +
+  labs(fill = "N")
+
+# Volcano variations
+p3 = ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  rasterise(geom_point(data = df, aes(x = log2FoldChange, y = -log10(padj), color = sig), size = 0.5), dpi = 300) +
+  scale_color_npg() +
+  theme_nice() + 
+  theme(aspect.ratio = 1) +
+  theme(legend.position = "top")
+
+p4 = ggplot() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  rasterise(geom_pointdensity(data = df, aes(x = log2FoldChange, y = -log10(padj)), size = 0.5, adjust = 5), dpi = 300) +
+  scale_color_viridis(option = "mako") +
+  theme_nice() +
+  theme(aspect.ratio = 1) +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = .5,
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) +
+  theme(legend.position = "top") 
+
+p1 | p3 | p2 | p4
+```
+
+```{r, fig.height=4, fig.width=12, fig.cap="\\textbf{Peak fold-changes without correction, on unchanged constructs split by peak support groups.} Plots show the relationship of computed fold-change with the underlying expression strength (MA-plot) and the statistical significance in form of the adjusted P value (volcano-plot)."}
+df = resChange
+df$support = ifelse(peaks_globalSmall$olKCL == 1 & peaks_globalSmall$olNACL == 1, "both", 
+                     ifelse(peaks_globalSmall$olKCL == 1, "KCl", "NaCl"))
+
+p1 = ggplot() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  rasterise(geom_pointdensity(data = df, aes(x = log2(baseMean), y = log2FoldChange), adjust = 5,  size = 0.5), dpi = 300) +
+  scale_color_viridis(option = "mako") +
+  theme_nice() +
+  theme(aspect.ratio = 1) + 
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = .5,
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) +
+  theme(legend.position = "top") +
+  facet_wrap(~support)
+
+p2 = ggplot() +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  rasterise(geom_pointdensity(data = df, aes(x = log2FoldChange, y = -log10(padj)), size = 0.5, adjust = 5), dpi = 300) +
+  scale_color_viridis(option = "mako") +
+  theme_nice() +
+  theme(aspect.ratio = 1) +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = .5,
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) +
+  theme(legend.position = "top") +
+  facet_wrap(~support)
+
+p1 + p2 + patchwork::plot_layout(guides = "collect") & theme(legend.position = 'top')
+```
+
+
+\FloatBarrier
+\pagebreak
+
+# Summary and numbers - tables
+
+
+```{r, table1}
+df1 = data.frame(constructID = const_notExpressed, expressionStatus = "1) Not expressed")
+df2 = data.frame(constructID = const_onlyReadThroughSignal, expressionStatus = "2) No Peak")
+df3 = data.frame(constructID = const_globalLarge, expressionStatus = "3) Large global change")
+df4 = data.frame(constructID = const_globalSmall, expressionStatus = "4) Final set")
+df = rbind(df1,df2,df3,df4)
+
+df = table(df$expressionStatus) %>% 
+  as.data.frame()
+colnames(df) = c("Expression status", "Value")
+df0 = data.frame("Expression status" = "0) All constructs", Value = 12000)
+colnames(df0) = c("Expression status", "Value")
+df = rbind(df0,df)
+df = format(df, big.mark = ",")
+kable(df, caption = "Expression status of constructs.")
+```
+
+```{r}
+# 1) For all constructs 
+# -> Classify expression status 
+df1 = data.frame(constructID = const_notExpressed, expressionStatus = "Not expressed", sigStatus = "-", dirStatus = "-", highConf = "-")
+df2 = data.frame(constructID = const_onlyReadThroughSignal, expressionStatus = "Expressed + No Peak", sigStatus = "-", dirStatus = "-", highConf = "-")
+df3 = data.frame(constructID = const_globalLarge, expressionStatus = "Expressed + global change", sigStatus = "-", dirStatus = "-", highConf = "-")
+
+# 2) For all "Expressed + small change" constructs
+# -> Classify significance of peaks
+idx = match(names(peaks_globalSmall), rownames(resChange))
+mcols(peaks_globalSmall) = cbind.data.frame(mcols(peaks_globalSmall), resChange[idx,])
+peaks_globalSmall_sig = peaks_globalSmall[peaks_globalSmall$sig == TRUE]
+const_globalSmall_sig = as.character(unique(seqnames(peaks_globalSmall_sig)))
+const_globalSmall_sigNot = const_globalSmall[!const_globalSmall %in% const_globalSmall_sig]
+df4 = data.frame(constructID = const_globalSmall_sigNot, expressionStatus = "Expressed + small change", sigStatus = FALSE, dirStatus = "-", highConf = "-")
+
+# 3) For all "Expressed + small change" and "Significant"
+# -> Classify direction
+resChange$dir = ifelse(resChange$log2FoldChange > 0, "Up", "Down")
+constTable = as.data.frame(table(resChange[resChange$sig == TRUE,]$constructID, resChange[resChange$sig == TRUE,]$dir)) %>% 
+  pivot_wider(names_from = c(Var2), values_from = Freq) %>% as.data.frame()
+sig_up = constTable$Var1[constTable$Down == 0 & constTable$Up >= 1]
+sig_down = constTable$Var1[constTable$Down >= 1 & constTable$Up == 0]
+sig_mixed = constTable$Var1[!constTable$Var1 %in% sig_up]
+sig_mixed = sig_mixed[!sig_mixed %in% sig_down]
+
+df5 = data.frame(constructID = sig_mixed, expressionStatus = "Expressed + small change", sigStatus = TRUE, dirStatus = "Mixed", highConf = "-")
+df6 = data.frame(constructID = sig_down, expressionStatus = "Expressed + small change", sigStatus = TRUE, dirStatus = "All down", highConf = "-")
+
+# 4) For Rest
+# -> Classify high confident
+constAllUp = resChange[resChange$constructID %in% sig_up,]
+highQTab = table(constAllUp$constructID, constAllUp$dir) %>% 
+  as.data.frame() %>% pivot_wider(names_from = c(Var2), values_from = Freq) %>% as.data.frame()
+highConf = highQTab$Var1[highQTab$Down == 0]
+s1 = highConf
+s2 = highQTab$Var1[!highQTab$Var1 %in% s1]
+
+df7 = data.frame(constructID = s1, expressionStatus = "Expressed + small change", sigStatus = TRUE, dirStatus = "All up", highConf = TRUE)
+df8 = data.frame(constructID = s2, expressionStatus = "Expressed + small change", sigStatus = TRUE, dirStatus = "All up", highConf = FALSE)
+
+dfAssignment = rbind(df1,df2,df3,df4,df5,df6,df7,df8)
+```
+
+```{r, table2}
+df = dfAssignment %>% group_by(expressionStatus, sigStatus, dirStatus, highConf) %>% 
+  summarize(n=n()) %>%
+  mutate(per = round((n/12000)*100,digits = 2))
+kable(df, caption = "Construct subclassification -old.")
+```
+
+```{r, table3}
+# Exxpression
+df1 = data.frame(type = "Expression", sig = FALSE, n = df$n[8])
+df2 = data.frame(type = "Expression", sig = TRUE, n = sum(df$n[1:7]))
+# Peak
+df3 = data.frame(type = "Peak", sig = FALSE, n = df$n[2])
+df4 = data.frame(type = "Peak", sig = TRUE, n = sum(df$n[c(1,3,4,5,6,7)]))
+# Global change
+df5 = data.frame(type = "Global change", sig = FALSE, n = df$n[1])
+df6 = data.frame(type = "Global change", sig = TRUE, n = sum(df$n[c(3,4,5,6,7)]))
+# Significant
+df7 = data.frame(type = "Significant", sig = FALSE, n = df$n[3])
+df8 = data.frame(type = "Significant", sig = TRUE, n = sum(df$n[c(4,5,6,7)]))
+# Direction
+df9 = data.frame(type = "Direction", sig = FALSE, n = df$n[4])
+df10 = data.frame(type = "Direction", sig = TRUE, n = sum(df$n[c(5,6,7)]))
+
+dfTotal = rbind(df1,df2,df3,df4,df5,df6,df7,df8,df9,df10) %>%
+  group_by(type) %>%
+  mutate(total = sum(n)) %>%
+  mutate(per = round((n/total)*100, digits = 1)) %>%
+  as.data.frame() %>%
+  select(type, sig, n, per)
+dfTotal2 = format(dfTotal, big.mark = ",", small.mark = ".")
+colnames(dfTotal2) = c("Type", "Selection", "#N", "%")
+kable(dfTotal2, caption = "Construct subclassification -new.")
+```
+
+```{r}
+dfAssignment2 = dfAssignment 
+dfAssignment2$status = ifelse(dfAssignment2$expressionStatus == "Not expressed", "Not Expressed", 
+                              ifelse(dfAssignment2$expressionStatus == "Expressed + No Peak", "No Peak", 
+                                     ifelse(dfAssignment2$expressionStatus == "Expressed + global change", "Global change", 
+                                            ifelse(dfAssignment2$expressionStatus == "Expressed + small change" & dfAssignment2$sigStatus == FALSE, "Not Significant", 
+                                                   ifelse(dfAssignment2$expressionStatus == "Expressed + small change" & dfAssignment2$sigStatus == TRUE & dfAssignment2$dirStatus == "All down", "Significant-Down", "Significant-Up")
+                                                   )
+                                            )
+                                     )
+                              )
+dfAssignment2 = dfAssignment2 %>% select(constructID, status)
+
+# append construct info list by G4 status
+idx = match(constructInfo$Construct.ID, dfAssignment2$constructID)
+constructInfo2 = cbind.data.frame(constructInfo, dfAssignment2[idx,])
+saveRDS(constructInfo2, file = "constructInfo2.rds")
+
+# add information to peaks granges
+idx = match(names(peaks_expressed), rownames(resSimple))
+mcols(peaks_expressed) = cbind(mcols(peaks_expressed), resSimple[idx,])
+idx = match(peaks_expressed$constructID, dfAssignment2$constructID)
+mcols(peaks_expressed) = cbind(mcols(peaks_expressed), dfAssignment2[idx,])
+peaks_expressed = peaks_expressed[peaks_expressed$constructID %in% const_globalSmall]
+idx = match(peaks_expressed$constructID, constructInfo2$Construct.ID)
+mcols(peaks_expressed)$RegionID = constructInfo2$Region.ID[idx]
+saveRDS(peaks_expressed, file = "peaks_expressed.rds")
+```
+
+```{r, table4}
+df = constructInfo2 %>% group_by(status) %>% summarise(nConst = n(), nRegion = length(unique(Region.ID))) 
+# %>% mutate(ratio = nConst/ nRegion)
+df = df[c(3,2,1,4,5,6),]
+
+df1 = table(peaks_expressed$status) %>% as.data.frame()
+df2 = table(subset(peaks_expressed, sig == TRUE)$status) %>% as.data.frame()
+df3 = table(subset(peaks_expressed, log2FoldChange > 0 & sig == TRUE)$status) %>% as.data.frame()
+
+
+df$nPeaks = df1$Freq[match(df$status, df1$Var1)]
+df$nPeaksSig = df2$Freq[match(df$status, df2$Var1)]
+df$nPeaksSigUp = df3$Freq[match(df$status, df3$Var1)]
+
+kable(df, caption = "Unique regions per construct. Number of constructs sums up to 12000. The number of regions does not sum up to 3000, because at this point a region can have constructs which were assigned to multiple categories. In these cases the regionID is counted multiple times.")
+```
+
+In summary this procedure yielded `r format(nrow(subset(resChange, sig == TRUE)), big.mark = ",")` significantly changed peaks on `r format(length(unique(resChange$constructID[resChange$sig == TRUE])), big.mark = ",")` constructs. From these `r length(unique(resChange$constructID[resChange$sig == TRUE & resChange$log2FoldChange > 0]))` constructs have at least one peak with the desired upwards shift. The total number of these peaks is `r format(nrow(subset(resChange, sig == TRUE & log2FoldChange > 0)), big.mark = ",")`
+
+\FloatBarrier
+\pagebreak
+
+# Summary and numbers - figures
+
+```{r, fig.width=8, fig.height=8, fig.cap="\\textbf{Inner = Type of filtering step; Outer = The final set}"}
+tmp = dfTotal %>% filter(sig == FALSE | type == "Direction") %>% 
+  mutate(sig = ifelse(sig == FALSE & type != "Direction", "-", ifelse(sig == FALSE, "Down", "Up"))) 
+tmp$names = c("Not Expressed", "No Peak", "Global change", "Not significant", "Significant", "Significant")
+webr::PieDonut(tmp, aes(pies = names, donuts = sig, count = n), start = 3 * pi/2, labelpositionThreshold = 0, showRatioThreshold = 0)
+```
+
+```{r, fig.width=10, fig.height=4, fig.cap="\\textbf{Construct to region subclassification.} For each of the 12.000 constructs the agreement with the 4 replicate regions is shown. Each construct might have it's replicates assigned to different classes (see colors). How many times a construct has its replicates in the same class is given by the numbers below (distinct groups). Eg. a construct with all of it's four replicates classified with the same term is represented in group 1. A constrcut where replicates spread over two different classification terms will be in group 2, ect. Each group is additionally colored by the total number of construct classifications.", eval=FALSE}
+tmp = constructInfo2 %>% group_by(Region.ID, status) %>% summarise(n = n())
+tmp = table(tmp$Region.ID) %>% as.data.frame()
+tmpSplit = split(tmp, tmp$Freq)
+df = lapply(tmpSplit, function(x){
+  currSet = constructInfo2$status[constructInfo2$Region.ID %in% x$Var1]
+  currSet = table(currSet) %>% as.data.frame()
+  return(currSet)
+})
+df = dplyr::bind_rows(df, .id = "Group")
+df$currSet = factor(df$currSet, levels = c("Not Expressed", "No Peak", "Global change", "Not Significant", "Significant-Down", "Significant-Up"))
+
+p1 = ggplot(df, aes(x = Group, y = Freq, fill = currSet)) +
+  geom_col(color = "black") +
+  scale_fill_viridis(option = "rocket", discrete = TRUE) +
+  theme_nice() +
+  theme(legend.position = "top") +
+  labs(
+    x = "Distinct region groups",
+    y = "#N constructs",
+    fill = "Construct classification"
+  )
+
+p2 = ggplot(df, aes(x = Group, y = Freq, fill = currSet)) +
+  geom_col(position = "fill", color = "black") +
+  scale_fill_viridis(option = "rocket", discrete = TRUE) +
+  theme_nice() +
+  theme(legend.position = "top") +
+  labs(
+    x = "Distinct region groups",
+    y = "Fraction",
+    fill = "Construct classification"
+  )
+
+p3 = ggplot(df, aes(x = Group, y = Freq, fill = currSet)) +
+  geom_col(position = "dodge", color = "black") +
+  scale_fill_viridis(option = "rocket", discrete = TRUE) +
+  theme_nice() +
+  theme(legend.position = "top") +
+  labs(
+    x = "Distinct region groups",
+    y = "#N constructs",
+    fill = "Construct classification"
+  )
+
+p1 + p2 + p3 + patchwork::plot_layout(guides = "collect") & theme(legend.position = "top")
+```
+
+```{r, fig.cap="\\textbf{Region distribution per classification category.} Each region can be assigned to multiple categories, based on the respective construct. Most regions (1.857) can be assigned to a single present category. Here all constructs were assigned to the same category (of the 3 presented); eg. for 1.031 regions all related constructs were assigned to the same category ('Significant-Up')."}
+allResConst = mcols(peaks_expressed) %>% 
+  as.data.frame() 
+allResConst = unique(allResConst$constructID)
+tmp1 = constructInfo2 %>% subset(constructID %in% allResConst) %>% select(Region.ID, constructID, status) 
+tmp2 = constructInfo2 %>% subset(constructID %in% allResConst) %>% select(Region.ID) 
+
+tmpSplit = split(tmp2, tmp1$status)
+
+l = list(`Not Significant` = tmpSplit$`Not Significant`$Region.ID,
+         `Significant-Down` = tmpSplit$`Significant-Down`$Region.ID,
+         `Significant-Up` = tmpSplit$`Significant-Up`$Region.ID)
+
+olMa = make_comb_mat(l)
+
+ha = HeatmapAnnotation(
+  "Intersections" = anno_barplot(comb_size(olMa), border = FALSE, gp = gpar(fill = "#a6a6a6"), height = unit(6, "cm"))
+)
+ha2 = HeatmapAnnotation(
+  "set sizes" = anno_barplot(set_size(olMa), border = FALSE, gp = gpar(fill = "#a6a6a6"), width = unit(4, "cm")),
+  which = "row"
+)
+ht = UpSet(olMa,
+           comb_order = order(comb_size(olMa), decreasing = T),
+           top_annotation = ha,
+           right_annotation = ha2,
+           comb_col = "#003399", bg_col = "white", pt_size = unit(.5, "cm") ,
+           border = T, lwd = 2, bg_pt_col = "#a6a6a6"
+)
+
+ss = set_size(olMa)
+cs = comb_size(olMa)
+ht = draw(ht,  padding = unit(c(0, 0, 10, 0), "mm"))
+od = column_order(ht)
+decorate_annotation("Intersections", {
+    grid.text(format(cs[od], big.mark = ".", decimal.mark = ","), x = seq_along(cs), y = unit(cs[od], "native") + unit(.1, "pt"), 
+        default.units = "native", just = c("left", "bottom"), 
+        gp = gpar(fontsize = 8, col = "black"), rot = 45)
+})
+```
+
+```{r, eval=FALSE}
+# This plot represents the distribution of constructs/ replicates over xxx regions per  category.
+
+allResConst = mcols(peaks_expressed) %>% 
+  as.data.frame() 
+allResConst = unique(allResConst$constructID)
+tmp1 = constructInfo2 %>% subset(constructID %in% allResConst) %>% group_by(Region.ID, status) %>% summarise(n = (n())) 
+
+# tmp = tmp %>% filter(Region.ID == "non-regulated.1000")
+
+tmp = table(tmp1$status, tmp1$n) %>% as.data.frame()
+
+ggplot(tmp, aes(x = Var2, y = Freq, fill = Var1)) + 
+  geom_col() +
+  labs(
+    x = "Construct/ replicate agreement",
+    y = "#N Regions",
+    title = "Construct classification",
+    subtitle = paste0("Regions: ", sum(tmp$Freq), ", Constructs: ", sum(tmp$Freq * as.numeric(tmp$Var2)))
+    ) +
+  scale_x_discrete(labels=c("1" = "1/4", "2" = "2/4", "3" = "3/4", "4" = "4/4"))
+```
+
+```{r, fig.width=3, fig.height=6, fig.cap="\\textbf{Region and construct agreement based on classification type - For all constructs.} Rows = regions; cols = classification; n = number of constructs."}
+# set.seed(2)
+# allResConst = mcols(peaks_expressed) %>% 
+#   as.data.frame() 
+# allResConst = unique(allResConst$constructID)
+# tmp1 = constructInfo2 %>% subset(constructID %in% allResConst) %>% group_by(Region.ID, status) %>% summarise(n = (n())) 
+tmp1 = constructInfo2 %>% group_by(Region.ID, status) %>% summarise(n = (n())) 
+
+tmpMat = tmp1 %>% pivot_wider(names_from = status, values_from = n) %>% replace(is.na(.), 0) %>% as.data.frame()
+rownames(tmpMat) = tmpMat$Region.ID
+tmpMat = tmpMat[,-c(1)]
+
+custom.col = viridis(10, option = "G", direction = -1)
+custom.col = viridis(10, option = "rocket", direction = -1)
+h = Heatmap(tmpMat, column_title = "Agreement", name = "Group overlap",
+            cluster_columns = T, cluster_rows = T,
+            show_row_names = FALSE,
+            show_column_names = T, border = T, col = custom.col,
+            row_km = 6, row_km_repeats = 10,
+            heatmap_legend_param = list(
+              # at = c(0,0.5, 1), labels = c("0", "0.5", "1"),
+              legend_width = unit(6, "cm"),
+              title_position = "topleft", direction = "horizontal"
+            ),
+            use_raster = TRUE
+)
+draw(h, heatmap_legend_side = "bottom")
+```
+
+```{r, fig.width=3, fig.height=6, fig.cap="\\textbf{Region and construct agreement based on classification type - Only for that survived filtering.} Rows = regions; cols = classification; n = number of constructs."}
+set.seed(2)
+allResConst = mcols(peaks_expressed) %>% 
+  as.data.frame() 
+allResConst = unique(allResConst$constructID)
+tmp1 = constructInfo2 %>% subset(constructID %in% allResConst) %>% group_by(Region.ID, status) %>% summarise(n = (n())) 
+
+tmpMat = tmp1 %>% pivot_wider(names_from = status, values_from = n) %>% replace(is.na(.), 0) %>% as.data.frame()
+rownames(tmpMat) = tmpMat$Region.ID
+tmpMat = tmpMat[,c(2,3,4)]
+
+custom.col = viridis(10, option = "G", direction = -1)
+custom.col = viridis(10, option = "rocket", direction = -1)
+h = Heatmap(tmpMat, column_title = "Agreement", name = "Group overlap",
+            cluster_columns = T, cluster_rows = T,
+            show_row_names = FALSE,
+            show_column_names = T, border = T, col = custom.col,
+            row_km = 4, row_km_repeats = 10,
+            heatmap_legend_param = list(
+              # at = c(0,0.5, 1), labels = c("0", "0.5", "1"),
+              legend_width = unit(6, "cm"),
+              title_position = "topleft", direction = "horizontal"
+            ),
+            use_raster = TRUE
+)
+draw(h, heatmap_legend_side = "bottom")
+```
+
+```{r, fig.width=12, fig.height=4, fig.cap="\\textbf{Number of peaks per construct.} On all expressed peaks N=36.624."}
+df = mcols(peaks_expressed) %>% as.data.frame()
+
+p1 = ggplot(df, aes(x = status, y = log2(baseMean), fill = status)) +
+  geom_boxplot() +
+  scale_fill_npg() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(x = "Construct group",
+       y = "BaseMean of peak")
+
+p2 = ggplot(df, aes(x = status, y = log2FoldChange, fill = status)) +
+  geom_boxplot() +
+  scale_fill_npg() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    labs(x = "Construct group",
+       y = "LFC of peak")
+
+dfSel = df %>% group_by(constructID, status) %>% summarise(n = n()) %>% as.data.frame()
+dfSel$n[dfSel$n > 10] = 10
+dfSel = table(dfSel$n, dfSel$status) %>% as.data.frame()
+p3 = ggplot(dfSel, aes(x = Var2, y = Freq, fill = Var1)) +
+  geom_col(position = "dodge", color = "black") +
+  scale_fill_viridis(option = "rocket", discrete = T) +
+  theme_nice() +
+  theme(legend.position = "top") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(x = "Construct group", y = "#N Contstructs", fill = "#N peaks", subtitle = "10 = 10+")
+
+p4 = ggplot(dfSel, aes(x = Var2, y = Freq, fill = Var1)) +
+  geom_col(position = "fill", color = "black") +
+  scale_fill_viridis(option = "rocket", discrete = T) +
+  theme_nice() +
+  theme(legend.position = "top") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(x = "Construct group", y = "#N Contstructs", fill = "#N peaks", subtitle = "10 = 10+")
+
+(p3 + p4) + patchwork::plot_layout(widths = c(2,1), guides = "collect") & theme(legend.position = "top") | (p1 + p2)
+```
+
+
+\FloatBarrier
+\pagebreak
+
+# G4 peak strength
+
+G4 peak strength is calculated for each peak over two different sets. Set1 comprises of all peaks on G4 containing constructs, whereas set2 contains only the G4 peaks on the G4 containing constructs. The strength of each of these peaks is determined by dividing its counts by the total counts of the hosing construct. 
+
+```{r, fig.width=9, fig.height=4, fig.cap="\\textbf{Correlation between KCl/ NaCl peak ratios and the LFC.} G4 Peaks only."}
+# Select significant G4 peaks
+G4Peaks = subset(peaks_expressed, status == "Significant-Up" & sig == TRUE & log2FoldChange > 0)
+  
+# add total construct read counts for each peak
+idx = match(G4Peaks$constructID, rownames(m))
+mcols(G4Peaks)$GTP_KCL_total = m$GTP_KCL_rep1[idx] + m$GTP_KCL_rep2[idx] + m$GTP_KCL_rep3[idx]
+mcols(G4Peaks)$GTP_NACL_total = m$GTP_NaCL_rep1[idx] + m$GTP_NaCL_rep2[idx] + m$GTP_NaCL_rep3[idx]
+
+# add read coutns per peak
+idx = match(names(G4Peaks), names(cov))
+mcols(G4Peaks)$GTP_KCL_peak = cov$`1_GTP_KCL`[idx] + cov$`2_GTP_KCL`[idx] + cov$`3_GTP_KCL`[idx]
+mcols(G4Peaks)$GTP_NACL_peak = cov$`4_GTP_NACL`[idx] + cov$`5_GTP_NACL`[idx] + cov$`6_GTP_NACL`[idx]
+
+df = G4Peaks %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("PeakID") %>%
+  select(PeakID, constructID, log2FoldChange, GTP_KCL_total, GTP_NACL_total, GTP_KCL_peak, GTP_NACL_peak) %>%
+  mutate(GTP_KCL_ratio = GTP_KCL_peak / GTP_KCL_total) %>%
+  mutate(GTP_NACL_ratio = GTP_NACL_peak / GTP_NACL_total)
+
+mcols(G4Peaks)$GTP_KCL_ratio = df$GTP_KCL_ratio
+mcols(G4Peaks)$GTP_NACL_ratio = df$GTP_NACL_ratio
+
+p1 = ggplot(df, aes(x = log2(GTP_KCL_ratio), y = log2FoldChange)) +
+  ggrastr::rasterise(geom_pointdensity(size = 1), dpi = 300) +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = .5,
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) +
+  theme(aspect.ratio = 1) 
+
+p2 = ggplot(df, aes(x = log2(GTP_NACL_ratio), y = log2FoldChange)) +
+  ggrastr::rasterise(geom_pointdensity(size = 1), dpi = 300) +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = .5,
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) +
+  theme(aspect.ratio = 1) 
+
+p3 = ggplot(df, aes(x = log2(GTP_NACL_ratio), y = GTP_KCL_ratio)) +
+  ggrastr::rasterise(geom_pointdensity(size = 1), dpi = 300) +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = .5, 
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) +
+  theme(aspect.ratio = 1) 
+
+p1 + p2 + p3
+```
+
+```{r, fig.width=6 ,fig.height=3, fig.cap="\\textbf{Density of ratios.} G4 Peaks only."}
+df = mcols(G4Peaks) %>% 
+  as.data.frame() %>%
+  select(GTP_KCL_ratio, GTP_NACL_ratio) %>%
+  pivot_longer(everything())
+
+ggplot(df, aes(x = log2(value), fill = name)) +
+  geom_density() +
+  facet_wrap(~name, scales = "free_y") +
+  theme_nice() +
+  theme(legend.position = "none") +
+  scale_fill_brewer(palette = "Paired")
+```
+
+```{r, fig.width=8, fig.height=8, fig.cap="\\textbf{Features split by number of peaks.} G4 Peaks only."}
+tmp = as.data.frame(G4Peaks) %>% group_by(constructID) %>% summarise(n = n())
+idx = match(G4Peaks$constructID, tmp$constructID)
+G4Peaks$nPeaks = tmp$n[idx]
+
+df = mcols(G4Peaks) %>%
+  as.data.frame() %>% 
+  select(nPeaks, log2FoldChange, GTP_KCL_ratio, GTP_NACL_ratio, GTP_KCL_total, GTP_NACL_total, GTP_KCL_peak, GTP_NACL_peak) %>%
+  mutate(nPeaks = factor(nPeaks, levels = c(1:(max(nPeaks))))) %>%
+  mutate(FoldChange = log2FoldChange^2) %>%
+  select(-log2FoldChange) %>%
+  pivot_longer(-nPeaks)
+
+p1 = ggplot(df) +
+  facet_wrap(~name, scales = "free") +
+  geom_boxplot(aes(x = nPeaks, y = log2(value), fill = nPeaks))+
+  scale_fill_viridis(option = "rocket", discrete = TRUE) +
+  theme_nice() +
+  theme(legend.position = "none") +
+  theme(strip.text.x = element_text(size = 8))
+
+
+df = mcols(G4Peaks) %>%
+  as.data.frame() %>% 
+  select(nPeaks) %>%
+  mutate(nPeaks = factor(nPeaks, levels = c(1:10)))
+
+p1 
+```
+
+```{r, fig.width=4, fig.height=4, fig.cap="\\textbf{Number of peaks per construct.} G4 Peaks only."}
+p2 = ggplot(df, aes(x = nPeaks, fill = nPeaks)) +
+  geom_bar(color = "black") +
+  scale_fill_viridis(option = "rocket", discrete = TRUE) +
+  theme_nice() +
+  theme(legend.position = "none") 
+p2
+```
+
+
+\FloatBarrier
+\pagebreak
+
+
+```{r, fig.width=9, fig.height=4, fig.cap="\\textbf{Correlation between KCl/ NaCl peak ratios and the LFC.} All peaks on G4 containing constructs."}
+# Select significant G4 peaks
+G4PeaksAll = subset(peaks_expressed, status == "Significant-Up")
+  
+# add total construct read counts for each peak
+idx = match(G4PeaksAll$constructID, rownames(m))
+mcols(G4PeaksAll)$GTP_KCL_total = m$GTP_KCL_rep1[idx] + m$GTP_KCL_rep2[idx] + m$GTP_KCL_rep3[idx]
+mcols(G4PeaksAll)$GTP_NACL_total = m$GTP_NaCL_rep1[idx] + m$GTP_NaCL_rep2[idx] + m$GTP_NaCL_rep3[idx]
+
+# add read coutns per peak
+idx = match(names(G4PeaksAll), names(cov))
+mcols(G4PeaksAll)$GTP_KCL_peak = cov$`1_GTP_KCL`[idx] + cov$`2_GTP_KCL`[idx] + cov$`3_GTP_KCL`[idx]
+mcols(G4PeaksAll)$GTP_NACL_peak = cov$`4_GTP_NACL`[idx] + cov$`5_GTP_NACL`[idx] + cov$`6_GTP_NACL`[idx]
+
+df = G4PeaksAll %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("PeakID") %>%
+  select(PeakID, constructID, log2FoldChange, GTP_KCL_total, GTP_NACL_total, GTP_KCL_peak, GTP_NACL_peak) %>%
+  mutate(GTP_KCL_ratio = GTP_KCL_peak / GTP_KCL_total) %>%
+  mutate(GTP_NACL_ratio = GTP_NACL_peak / GTP_NACL_total)
+
+mcols(G4PeaksAll)$GTP_KCL_ratio = df$GTP_KCL_ratio
+mcols(G4PeaksAll)$GTP_NACL_ratio = df$GTP_NACL_ratio
+
+p1 = ggplot(df, aes(x = log2(GTP_KCL_ratio), y = log2FoldChange)) +
+  ggrastr::rasterise(geom_pointdensity(size = 1), dpi = 300) +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = .5,
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) +
+  theme(aspect.ratio = 1) 
+
+p2 = ggplot(df, aes(x = log2(GTP_NACL_ratio), y = log2FoldChange)) +
+  ggrastr::rasterise(geom_pointdensity(size = 1), dpi = 300) +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = .5,
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) +
+  theme(aspect.ratio = 1) 
+
+p3 = ggplot(df, aes(x = log2(GTP_NACL_ratio), y = GTP_KCL_ratio)) +
+  ggrastr::rasterise(geom_pointdensity(size = 1), dpi = 300) +
+  scale_color_viridis() +
+  theme_nice() +
+  theme(legend.position = "top") +
+  guides(color = guide_colorbar(title.position = 'top', title.hjust = .5, 
+                                barwidth = unit(10, 'lines'), barheight = unit(.5, 'lines'))) +
+  theme(aspect.ratio = 1) 
+
+p1 + p2 + p3
+```
+
+```{r, fig.width=6 ,fig.height=3, fig.cap="\\textbf{Density of ratios.} All peaks on G4 containing constructs."}
+df = mcols(G4PeaksAll) %>% 
+  as.data.frame() %>%
+  select(GTP_KCL_ratio, GTP_NACL_ratio) %>%
+  pivot_longer(everything())
+
+ggplot(df, aes(x = log2(value), fill = name)) +
+  geom_density() +
+  facet_wrap(~name, scales = "free_y") +
+  theme_nice() +
+  theme(legend.position = "none") +
+  scale_fill_brewer(palette = "Paired")
+```
+
+```{r, fig.width=8, fig.height=8, fig.cap="\\textbf{Features split by number of peaks.} All peaks on G4 containing constructs."}
+tmp = as.data.frame(G4PeaksAll) %>% group_by(constructID) %>% summarise(n = n())
+idx = match(G4PeaksAll$constructID, tmp$constructID)
+G4PeaksAll$nPeaks = tmp$n[idx]
+
+df = mcols(G4PeaksAll) %>%
+  as.data.frame() %>% 
+  select(nPeaks, log2FoldChange, GTP_KCL_ratio, GTP_NACL_ratio, GTP_KCL_total, GTP_NACL_total, GTP_KCL_peak, GTP_NACL_peak) %>%
+  mutate(nPeaks = ifelse(nPeaks > 10, 10, nPeaks)) %>%
+  mutate(nPeaks = factor(nPeaks, levels = c(1:(max(nPeaks))))) %>%
+  mutate(FoldChange = log2FoldChange^2) %>%
+  select(-log2FoldChange) %>%
+  pivot_longer(-nPeaks)
+
+p1 = ggplot(df) +
+  facet_wrap(~name, scales = "free") +
+  geom_boxplot(aes(x = nPeaks, y = log2(value), fill = nPeaks))+
+  scale_fill_viridis(option = "rocket", discrete = TRUE) +
+  theme_nice() +
+  theme(legend.position = "none") +
+  theme(strip.text.x = element_text(size = 8)) +
+  labs(subtitle = "10 = 10+")
+
+
+df = mcols(G4PeaksAll) %>%
+  as.data.frame() %>% 
+  select(nPeaks) %>%
+  mutate(nPeaks = ifelse(nPeaks > 10, 10, nPeaks)) %>%
+  mutate(nPeaks = factor(nPeaks, levels = c(1:10)))
+
+p1 
+```
+
+```{r, fig.width=4, fig.height=4, fig.cap="\\textbf{Number of peaks per construct} All peaks on G4 containing constructs."}
+p2 = ggplot(df, aes(x = nPeaks, fill = nPeaks)) +
+  geom_bar(color = "black") +
+  scale_fill_viridis(option = "rocket", discrete = TRUE) +
+  theme_nice() +
+  theme(legend.position = "none") +
+  labs(subtitle = "10 = 10+")
+p2
+```
+
+
+```{r, saveG4Peaks}
+library(xlsx)
+
+df = G4Peaks %>% 
+  as.data.frame() %>% 
+  arrange(desc(GTP_KCL_ratio)) %>%
+  tibble::rownames_to_column(var = "peakID") %>%
+  relocate(peakID, constructID, start, end, width, strand,
+           GTP_KCL_peak, GTP_KCL_total, GTP_KCL_ratio, GTP_NACL_peak, GTP_NACL_total, GTP_NACL_ratio,
+           log2FoldChange, padj, baseMean,
+           status
+           ) %>%
+  select(1:16)
+
+write.xlsx(df, file = "g4peaklist.xlsx", sheetName = "G4Peaks")
+saveRDS(G4Peaks, file = "G4Peaks.rds")
+```
+
+
+\FloatBarrier
+\pagebreak
+
+# Sequence composition
+
+```{r}
+library(ggseqlogo)
+getPeakSeq <- function(peak, adjacentNucs, trimRight) {
+  r1 = (peak) %>% as.data.frame()
+  seq <- constructInfo2$Seq[match(r1$seqnames, constructInfo2$Construct.ID)]
+  peakSeq <- substr(seq, start=r1$start-adjacentNucs, stop=r1$start+adjacentNucs-trimRight)
+  return(peakSeq)
+}
+```
+
+```{r, fig.width=10, fig.height=4, fig.cap="\\textbf{G4 motif on all G4 containing constructs.}", eval=FALSE}
+G4PeaksAll = subset(peaks_expressed, status == "Significant-Up")
+G4PeaksSigDown = subset(peaks_expressed, status == "Significant-Up" & sig == TRUE & log2FoldChange < 0)
+G4PeaksSigDown = subset(peaks_expressed, status == "Significant-Down" & sig == TRUE)
+
+df1 = getPeakSeq(G4Peaks, adjacentNucs = 8, trimRight = 6)
+df2 = getPeakSeq(G4PeaksSigDown, adjacentNucs = 8, trimRight = 6)
+df3 = getPeakSeq(G4PeaksAll, adjacentNucs = 8, trimRight = 6)
+# l = list(`G4 Peaks` = df1, `Sig Down` = df2, `All Peaks` = df3)
+
+p1 = ggplot() +
+  geom_logo(df1)  +
+  scale_x_continuous(breaks = 1:11, labels = -9:1) +
+  labs(
+    x = "Relative postion",
+    title = "G4 Peaks",
+    subtitle = paste0("Peaks: N=", format(length(df1), big.mark = ","))) +
+  ylim(0,2) +
+  theme_nice()
+
+p2 = ggplot() +
+  geom_logo(df2)  +
+  scale_x_continuous(breaks = 1:11, labels = -9:1) +
+  labs(
+    x = "Relative postion",
+    title = "Peaks Sig down",
+    subtitle = paste0("Peaks: N=", format(length(df2), big.mark = ","))) +
+  ylim(0,2) +
+  theme_nice()
+
+p3 = ggplot() +
+  geom_logo(df3)  +
+  scale_x_continuous(breaks = 1:11, labels = -9:1) +
+  labs(
+    x = "Relative postion",
+    title = "All Peaks on G4 constructs",
+    subtitle = paste0("Peaks: N=", format(length(df3), big.mark = ","))) +
+  ylim(0,2) +
+  theme_nice()
+
+p1 + p2 + p3
+```
+
+```{r, fig.width=12, fig.height=8, fig.cap="\\textbf{G4 motif on different sets of constructs.}"}
+set1 = subset(peaks_expressed, status == "Not Significant")
+set2 = subset(peaks_expressed, status == "Significant-Up")
+set3 = subset(peaks_expressed, status == "Significant-Down")
+set4 = subset(peaks_expressed, status == "Significant-Up" & sig == TRUE)
+set5 = subset(peaks_expressed, status == "Significant-Down" & sig == TRUE)
+set6 = subset(peaks_expressed, status == "Significant-Up" & sig == TRUE & log2FoldChange > 0)
+
+df1 = getPeakSeq(set1, adjacentNucs = 17, trimRight = 16)
+df2 = getPeakSeq(set2, adjacentNucs = 17, trimRight = 16)
+df3 = getPeakSeq(set3, adjacentNucs = 17, trimRight = 16)
+df4 = getPeakSeq(set4, adjacentNucs = 17, trimRight = 16)
+df5 = getPeakSeq(set5, adjacentNucs = 17, trimRight = 16)
+df6 = getPeakSeq(set6, adjacentNucs = 17, trimRight = 16)
+
+mat1 <- as.matrix(DNAStringSet(df1) %>% RNAStringSet())
+g4.rects1 <- tibble(xmin = which(colMeans(mat1 == "G")>0.35)-0.5, xmax = which(colMeans(mat1 == "G")>0.35)+0.5)
+
+mat6 <- as.matrix(DNAStringSet(df6) %>% RNAStringSet())
+g4.rects6 <- tibble(xmin = which(colMeans(mat6 == "G")>0.35)-0.5, xmax = which(colMeans(mat6 == "G")>0.35)+0.5)
+
+p1 = ggplot() +
+  geom_logo(DNAStringSet(df1) %>% RNAStringSet() %>% as.character, method="probability", rev_stack_order=T)  +
+  #geom_rect(data = g4.rects1, aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf), inherit.aes = FALSE, fill = "gold", alpha = 0.15)+
+  scale_x_continuous(breaks = 1:19, labels = -18:0) +
+  labs(
+    x = "Relative peak postion",
+    title = "Not Significant construct",
+    subtitle = paste0("Peaks: N=", format(length(df1), big.mark = ","))) +
+  #ylim(0,2) +
+  theme_bw()
+
+p2 = ggplot() +
+  geom_logo(df2, method="probability", rev_stack_order=T)  +
+  scale_x_continuous(breaks = 1:19, labels = -18:0) +
+  labs(
+    x = "Relative peak postion",
+    title = "Significant-Up construct",
+    subtitle = paste0("Peaks: N=", format(length(df2), big.mark = ","))) +
+  #ylim(0,2) +
+  theme_nice(size = 8)
+
+p3 = ggplot() +
+  geom_logo(df3, method="probability", rev_stack_order=T)  +
+  scale_x_continuous(breaks = 1:19, labels = -18:0) +
+  labs(
+    x = "Relative peak postion",
+    title = "Significant-Down construct",
+    subtitle = paste0("Peaks: N=", format(length(df3), big.mark = ","))) +
+  #ylim(0,2) +
+  theme_nice(size = 8)
+
+p4 = ggplot() +
+  geom_logo(df4, method="probability", rev_stack_order=T)  +
+  scale_x_continuous(breaks = 1:19, labels = -18:0) +
+  labs(
+    x = "Relative peak postion",
+    title = "Significant-Up construct + Sig peaks only",
+    subtitle = paste0("Peaks: N=", format(length(df4), big.mark = ","))) +
+  #ylim(0,2) +
+  theme_nice(size = 8)
+
+p5 = ggplot() +
+  geom_logo(df5, method="probability", rev_stack_order=T)  +
+  scale_x_continuous(breaks = 1:19, labels = -18:0) +
+  labs(
+    x = "Relative peak postion",
+    title = "Significant-Down construct + Sig peaks only",
+    subtitle = paste0("Peaks: N=", format(length(df5), big.mark = ","))) +
+  #ylim(0,2) +
+  theme_nice(size = 8)
+
+p6 = ggplot() +
+  geom_logo(DNAStringSet(df6) %>% RNAStringSet() %>% as.character(), method="probability", rev_stack_order=T)  +
+  #geom_rect(data = g4.rects6, aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf), inherit.aes = FALSE, fill = "gold", alpha = 0.15)+
+  scale_x_continuous(breaks = 1:19, labels = -18:0) +
+  labs(
+    x = "Relative peak postion",
+    title = "rG4 peaks",
+    subtitle = paste0("Peaks: N=", format(length(df6), big.mark = ",")))+
+  #ylim(0,2) +
+  theme_bw()
+
+(p1 + p2 + p3) / (p4 + p5 + p6)
+
+p1
+ggsave(filename = "~/Desktop/H/final/1.pdf")
+
+p6
+ggsave(filename = "~/Desktop/H/final/2.pdf")
+
+A <- colMeans(mat1 == "A")
+C <- colMeans(mat1 == "C")
+G <- colMeans(mat1 == "G")
+U <- colMeans(mat1 == "U")
+df <- data.frame(position = seq(-18, 0), G = G, U=U, A=A, C=C)
+
+ggplot(df %>% pivot_longer(c(G,C,U,A)), aes(position, value, color=name)) +
+    geom_step(linewidth = 1.2, direction = "mid") +
+    geom_hline(yintercept = mean(mat1 == "G"), linetype = "dotted", colour = "grey40") +
+    #geom_rect(data = g4.rects2, aes(xmin = xmin - 0.5, xmax = xmax + 0.5, ymin = -Inf, ymax = Inf), inherit.aes = FALSE, fill = "gold", alpha = 0.2)+
+    scale_color_manual(values=c('#109648', '#255C99', '#F7B32B', '#D62839'))+
+    ggtitle("Frequency of bases (other)")+
+    theme_bw()
+ggsave(filename = "~/Desktop/H/final/3.pdf")
+
+A <- colMeans(mat6 == "A")
+C <- colMeans(mat6 == "C")
+G <- colMeans(mat6 == "G")
+U <- colMeans(mat6 == "U")
+df <- data.frame(position = seq(-18, 0), G = G, U=U, A=A, C=C)
+
+ggplot(df %>% pivot_longer(c(G,C,U,A)), aes(position, value, color=name)) +
+    geom_step(linewidth = 1.2, direction = "mid") +
+    geom_hline(yintercept = mean(mat6 == "G"), linetype = "dotted", colour = "grey40") +
+    #geom_rect(data = g4.rects2, aes(xmin = xmin - 0.5, xmax = xmax + 0.5, ymin = -Inf, ymax = Inf), inherit.aes = FALSE, fill = "gold", alpha = 0.2)+
+    scale_color_manual(values=c('#109648', '#255C99', '#F7B32B', '#D62839'))+
+    ggtitle("Frequency of bases (rG4)")+
+    theme_bw()
+ggsave(filename = "~/Desktop/H/final/4.pdf")
+```
+
+
+
+```{r, fig.width=12, fig.height=6, fig.cap="\\textbf{G4 Peaks split by KCL ratio.}"}
+q = quantile(G4Peaks$GTP_KCL_ratio, probs = seq(0, 1, by = 0.1))
+s = findInterval(G4Peaks$GTP_KCL_ratio, q, all.inside = TRUE)
+mcols(G4Peaks)$GTP_KCL_ratio_bin = s
+splitPeaks = split(G4Peaks, G4Peaks$GTP_KCL_ratio_bin)
+df = lapply(splitPeaks, function(x){
+  getPeakSeq(x, adjacentNucs = 6, trimRight = 5)
+})
+p1 = ggseqlogo(df, ncol = 10) +
+  geom_hline(yintercept = 2, linetype = "dashed") +
+  labs(subtitle = "Split by quantile - 10% of data") 
+
+lenDf = data.frame(set = names(sapply(df, length)), l = sapply(df, length))
+lenDf$set = factor(lenDf$set, levels = c(1:10))
+p10 = ggplot(lenDf, aes(x = set, y = l)) +
+  geom_col() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  labs(x = "Set", y = "#N")
+
+
+q = seq(0, 1, by = 0.1)
+s = findInterval(G4Peaks$GTP_KCL_ratio, q, all.inside = TRUE)
+mcols(G4Peaks)$GTP_KCL_ratio_bin = s
+splitPeaks = split(G4Peaks, G4Peaks$GTP_KCL_ratio_bin)
+df = lapply(splitPeaks, function(x){
+  getPeakSeq(x, adjacentNucs = 6, trimRight = 5)
+})
+p2 = ggseqlogo(df, ncol = 10) +
+  geom_hline(yintercept = 2, linetype = "dashed") +
+  labs(subtitle = "Split by ratio - 10% steps")
+
+lenDf = data.frame(set = names(sapply(df, length)), l = sapply(df, length))
+lenDf$set = factor(lenDf$set, levels = c(1:10))
+p20 = ggplot(lenDf, aes(x = set, y = l)) +
+  geom_col() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  labs(x = "Set", y = "#N")
+
+p1 + p10 + p2 + p20 + plot_layout(widths = c(4, 1))
+```
+
+```{r, fig.width=12, fig.height=6, fig.cap="\\textbf{G4 Peaks split by NaCl ratio.}"}
+q = quantile(G4Peaks$GTP_NACL_ratio, probs = seq(0, 1, by = 0.1))
+s = findInterval(G4Peaks$GTP_NACL_ratio, q, all.inside = TRUE)
+mcols(G4Peaks)$GTP_NACL_ratio_bin = s
+splitPeaks = split(G4Peaks, G4Peaks$GTP_NACL_ratio_bin)
+df = lapply(splitPeaks, function(x){
+  getPeakSeq(x, adjacentNucs = 6, trimRight = 5)
+})
+p1 = ggseqlogo(df, ncol = 10) +
+  geom_hline(yintercept = 2, linetype = "dashed") +
+  labs(subtitle = "Split by quantile - 10% of data") 
+
+lenDf = data.frame(set = names(sapply(df, length)), l = sapply(df, length))
+lenDf$set = factor(lenDf$set, levels = c(1:10))
+p10 = ggplot(lenDf, aes(x = set, y = l)) +
+  geom_col() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  labs(x = "Set", y = "#N")
+
+
+q = seq(0, 1, by = 0.1)
+s = findInterval(G4Peaks$GTP_NACL_ratio, q, all.inside = TRUE)
+mcols(G4Peaks)$GTP_NACL_ratio_bin = s
+splitPeaks = split(G4Peaks, G4Peaks$GTP_NACL_ratio_bin)
+df = lapply(splitPeaks, function(x){
+  getPeakSeq(x, adjacentNucs = 6, trimRight = 5)
+})
+p2 = ggseqlogo(df, ncol = 10) +
+  geom_hline(yintercept = 2, linetype = "dashed") +
+  labs(subtitle = "Split by ratio - 10% steps")
+
+lenDf = data.frame(set = names(sapply(df, length)), l = sapply(df, length))
+lenDf$set = factor(lenDf$set, levels = c(1:10))
+p20 = ggplot(lenDf, aes(x = set, y = l)) +
+  geom_col() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  labs(x = "Set", y = "#N")
+
+p1 + p10 + p2 + p20 + plot_layout(widths = c(4, 1))
+```
+
+```{r, fig.width=12, fig.height=6, fig.cap="\\textbf{G4 Peaks split by LFC.}"}
+q = quantile(G4Peaks$log2FoldChange, probs = seq(0, 1, by = 0.1))
+s = findInterval(G4Peaks$log2FoldChange, q, all.inside = TRUE)
+mcols(G4Peaks)$log2FoldChange_bin = s
+splitPeaks = split(G4Peaks, G4Peaks$log2FoldChange_bin)
+df = lapply(splitPeaks, function(x){
+  getPeakSeq(x, adjacentNucs = 6, trimRight = 5)
+})
+p1 = ggseqlogo(df, ncol = 10) +
+  geom_hline(yintercept = 2, linetype = "dashed") +
+  labs(subtitle = "Split by quantile - 10% of data") 
+
+lenDf = data.frame(set = names(sapply(df, length)), l = sapply(df, length))
+lenDf$set = factor(lenDf$set, levels = c(1:10))
+p10 = ggplot(lenDf, aes(x = set, y = l)) +
+  geom_col() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  labs(x = "Set", y = "#N")
+
+
+q = seq(0, 10, by = 1)
+s = findInterval(G4Peaks$log2FoldChange, q, all.inside = TRUE)
+mcols(G4Peaks)$log2FoldChange_bin = s
+splitPeaks = split(G4Peaks, G4Peaks$log2FoldChange_bin)
+df = lapply(splitPeaks, function(x){
+  getPeakSeq(x, adjacentNucs = 6, trimRight = 5)
+})
+p2 = ggseqlogo(df, ncol = 10) +
+  geom_hline(yintercept = 2, linetype = "dashed") +
+  labs(subtitle = "Split by ratio - 1 LFC steps")
+
+lenDf = data.frame(set = names(sapply(df, length)), l = sapply(df, length))
+lenDf$set = factor(lenDf$set, levels = c(1:10))
+p20 = ggplot(lenDf, aes(x = set, y = l)) +
+  geom_col() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  labs(x = "Set", y = "#N")
+
+p1 + p10 + p2 + p20 + plot_layout(widths = c(4, 1))
+```
+
+```{r, fig.width=12, fig.height=3, fig.cap="\\textbf{G4 Peaks split by number of peaks in contstruct.}"}
+splitPeaks = split(G4Peaks, G4Peaks$nPeaks)
+df = lapply(splitPeaks, function(x){
+  getPeakSeq(x, adjacentNucs = 6, trimRight = 5)
+})
+p1 = ggseqlogo(df, ncol = 10) +
+  geom_hline(yintercept = 2, linetype = "dashed") +
+  labs(subtitle = "Split by quantile - 10% of data") 
+
+lenDf = data.frame(set = names(sapply(df, length)), l = sapply(df, length))
+lenDf$set = factor(lenDf$set, levels = c(1:10))
+p10 = ggplot(lenDf, aes(x = set, y = l)) +
+  geom_col() +
+  theme_nice() +
+  theme(legend.position = "none") +
+  labs(x = "Set", y = "#N")
+
+
+p1 + p10 + plot_layout(widths = c(4, 1))
+```
+
+
+\FloatBarrier
+\pagebreak
+
+# Reproducibility among replicates
+
+Read counts per replicate are comparable for each condition. This is a supplementary plot that could be used earlier in the analysis to show the reproducibility among replicates. 
+
+```{r, fig.width=10, fig.height=5, fig.cap="\\textbf{Fraction of read counts per replicate}"}
+library(ggtern)
+tmp = G4Peaks
+
+idx = match(tmp$constructID, rownames(m))
+mcols(tmp)$GTP_KCL_rep1 = m$GTP_KCL_rep1[idx] 
+mcols(tmp)$GTP_KCL_rep2 = m$GTP_KCL_rep3[idx] 
+mcols(tmp)$GTP_KCL_rep3 = m$GTP_KCL_rep2[idx] 
+
+df = tmp %>%
+  as.data.frame() %>%
+  select(GTP_KCL_rep1, GTP_KCL_rep2, GTP_KCL_rep3) %>%
+  mutate(s = rowSums(.)) %>%
+  tibble::rownames_to_column("PeakID") %>%
+  mutate(fracR1 = GTP_KCL_rep1/ s, fracR2= GTP_KCL_rep2/ s, fracR3 = GTP_KCL_rep3/ s)
+  
+p1 = ggtern(df, aes(x = fracR1, y = fracR2, z = fracR3)) + 
+  theme_rgbw() + 
+  geom_point(shape = 21, size = 2, fill = "grey") +
+  theme(aspect.ratio = 1) +
+  labs(
+    title = "GTP KCL",
+    x = "Rep1",
+    y = "Rep2",
+    z = "Rep3"
+  ) +
+  tern_limits(T=1.1, L=1.1, R=1.1) +
+  theme(aspect.ratio = 1) 
+
+tmp = G4Peaks
+idx = match(tmp$constructID, rownames(m))
+mcols(tmp)$GTP_NACL_rep1 = m$GTP_NaCL_rep1[idx] 
+mcols(tmp)$GTP_NACL_rep2 = m$GTP_NaCL_rep2[idx] 
+mcols(tmp)$GTP_NACL_rep3 = m$GTP_NaCL_rep3[idx] 
+
+df = tmp %>%
+  as.data.frame() %>%
+  select(GTP_NACL_rep1, GTP_NACL_rep2, GTP_NACL_rep3) %>%
+  mutate(s = rowSums(.)) %>%
+  tibble::rownames_to_column("PeakID") %>%
+  mutate(fracR1 = GTP_NACL_rep1/ s, fracR2= GTP_NACL_rep2/ s, fracR3 = GTP_NACL_rep3/ s)
+  
+p2 = ggtern(df, aes(x = fracR1, y = fracR2, z = fracR3)) + 
+  theme_rgbw() + 
+  geom_point(shape = 21, size = 2, fill = "grey") +
+  theme(aspect.ratio = 1) +
+  labs(
+    title = "GTP NaCL",
+    x = "Rep1",
+    y = "Rep2",
+    z = "Rep3"
+  ) +
+  tern_limits(T=1.1, L=1.1, R=1.1) +
+  theme(aspect.ratio = 1) 
+
+grid.arrange(p1,p2, ncol = 2)
+```
+
+
+\FloatBarrier
+\pagebreak
+
+# Session Information
+
+```{r, session_info, include=TRUE, echo=TRUE, results='markup'}
+sessionInfo()
+```

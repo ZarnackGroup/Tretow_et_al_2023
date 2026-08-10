@@ -1,0 +1,592 @@
+---
+title: "Changes in peak strength between KCL and NaCL"
+author: "Mario Keller"
+date: "`r format(Sys.time(), '%B %e, %Y')`"
+output:
+  pdf_document:
+    fig_caption: yes
+    keep_tex: yes
+    toc: yes
+    toc_depth: 3
+    number_sections: yes
+  html_document:
+    toc: yes
+    toc_depth: '3'
+    df_print: paged
+geometry: left=1cm,right=1cm,top=1.5cm,bottom=1.5cm
+header-includes:
+- \makeatletter\renewcommand*{\fps@figure}{h}\makeatother
+- \usepackage{placeins}
+---
+
+```{r libraries, echo=FALSE, message=FALSE, warning=FALSE}
+library(knitr)
+library(tidyr)
+library(egg)
+library(ggplot2)
+library(gridExtra)
+library(ggExtra)
+library(ggpointdensity)
+library(viridis)
+library(stringr)
+library(dplyr)
+library(GenomicRanges)
+library(matrixStats)
+library(tibble)
+library(forcats)
+library(factoextra)
+library(FactoMineR)
+library(kableExtra)
+library(ggseqlogo)
+```
+
+```{r chunkOpts, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE, fig.pos = 'h', fig.align = "center", fig.width = 6, fig.height=6)
+```
+
+```{r ggplotThemes, echo=FALSE, message=FALSE, warning=FALSE}
+ggplot.theme <- theme_bw() +
+      theme(
+        axis.text=element_text(size=7,face="bold", color = "black"),
+        axis.title.x=element_text(size=8,face="bold"),
+        axis.title.y=element_text(size=8,face="bold", vjust = 0),
+        plot.title = element_text(size=8,face="bold"),
+        legend.text = element_text(size=8,face="bold"),
+        legend.title = element_text(size=8,face="bold"),
+        legend.position = "bottom",
+        legend.direction="horizontal")
+
+ggplot.theme.no.legend <- theme_bw() +
+      theme(
+        axis.text=element_text(size=7,face="bold", color = "black"),
+        axis.title.x=element_text(size=8,face="bold"),
+        axis.title.y=element_text(size=8,face="bold", vjust = 0),
+        plot.title = element_text(size=8,face="bold"),
+        legend.text = element_text(size=8,face="bold"),
+        legend.title = element_text(size=8,face="bold"),
+        legend.position = "none",
+        legend.direction="vertical")
+```
+
+```{r defineCols}
+experiment_cols = c("GTP_KCL_rep1" = "#1b8904", "GTP_KCL_rep2" = "#1b8904", "GTP_KCL_rep3" = "#1b8904",
+                    "GTP_NaCL_rep1" = "#0a1fb3", "GTP_NaCL_rep2" = "#0a1fb3", "GTP_NaCL_rep3" = "#0a1fb3",
+                    "7dGTP_KCL_rep1" = "#91da81", "7dGTP_KCL_rep2" = "#91da81", "7dGTP_KCL_rep3" = "#91da81",
+                    "7dGTP_NaCL_rep1" = "#7d8aea", "7dGTP_NaCL_rep2" = "#7d8aea", "7dGTP_NaCL_rep3" = "#7d8aea")
+```
+
+\pagebreak
+
+```{r loadData}
+#Mirko's peaks
+load("../BindingSites/mean_cl1/data/sitesReproducible.rda")
+peaksRanges <- sitesReproducible
+rm(sitesReproducible)
+names(peaksRanges) <- c()
+seqlevels(peaksRanges) <- as.character(sprintf("%05d", 1:12000))
+#ReadCounts on the 12k constructs
+RTstop.profiling.l <- readRDS("../rds/RTstop.profiling.l.rds")
+
+constructInformation <- readRDS("../rds/construct.information.df.rds")
+```
+
+# Pre-processing
+
+First, I determined the peak signal in the GTP KCL and GTP NaCL replicates by summing up the read counts in the 3nt wide peaks and added a pseudo count of 1. For a second approach, I merged the biological replicates by summing up the peak signals. In total there were `r length(peaksRanges)`.
+
+```{r peakSignal, fig.width=10, fig.height=4}
+pseudoCount <- 1
+peaksRanges$GTP_KCL_rep1 <-  RTstop.profiling.l$GTP_KCL_rep1[peaksRanges] %>% sum + pseudoCount
+peaksRanges$GTP_KCL_rep2 <-  RTstop.profiling.l$GTP_KCL_rep2[peaksRanges] %>% sum + pseudoCount
+peaksRanges$GTP_KCL_rep3 <-  RTstop.profiling.l$GTP_KCL_rep3[peaksRanges] %>% sum + pseudoCount
+
+peaksRanges$GTP_NaCL_rep1 <-  RTstop.profiling.l$GTP_NaCL_rep1[peaksRanges] %>% sum + pseudoCount
+peaksRanges$GTP_NaCL_rep2 <-  RTstop.profiling.l$GTP_NaCL_rep2[peaksRanges] %>% sum + pseudoCount
+peaksRanges$GTP_NaCL_rep3 <-  RTstop.profiling.l$GTP_NaCL_rep3[peaksRanges] %>% sum + pseudoCount
+
+# -2 to counteract the 3xpseudoCount
+peaksRanges$GTP_KCL_merge <- rowSums(cbind(peaksRanges$GTP_KCL_rep1, peaksRanges$GTP_KCL_rep2, peaksRanges$GTP_KCL_rep3))
+peaksRanges$GTP_NaCL_merge <- rowSums(cbind(peaksRanges$GTP_NaCL_rep1, peaksRanges$GTP_NaCL_rep2, peaksRanges$GTP_NaCL_rep3))
+
+peaksRanges %>% as.data.frame %>% pivot_longer(., cols=starts_with("GTP"), names_to="experiment", values_to = "peakSignal") %>%
+  mutate(experiment = forcats::fct_relevel(experiment, "GTP_KCL_rep1", "GTP_KCL_rep2", "GTP_KCL_rep3", "GTP_KCL_merge",
+                       "GTP_NaCL_rep1", "GTP_NaCL_rep2", "GTP_NaCL_rep3", "GTP_NaCL_merge"))  %>%
+  ggplot(., aes(x=log2(peakSignal))) +
+  geom_histogram(bins=50) +
+  facet_wrap(~experiment, ncol=4, nrow=2) +
+  labs(y="Frequency") +
+  ggplot.theme.no.legend
+```
+
+For a first qualitative overview I determined how many peaks are located in the inidividual constructs. 
+
+```{r peaksPerConstruct, fig.height=3, fig.width=4}
+peaksPerConstruct <- peaksRanges %>%
+  seqnames %>%
+  table %>%
+  as.data.frame %>%
+  dplyr::rename(., constructID=.) %>%
+  mutate(., constructID = as.character(constructID))
+
+plotDF <- peaksPerConstruct$Freq %>% table %>%
+        as.data.frame(., stringsAsFactors = FALSE) %>%
+        dplyr::rename(., nPeaks=., freq=Freq)
+
+plotDF$freq[7] <- sum(plotDF$freq[!plotDF$nPeaks %in% c("0", "1", "2", "3", "4", "5")])
+plotDF$nPeaks[7] <- ">5"
+plotDF <- plotDF[1:7,]
+
+plotDF$nPeaks <- factor(plotDF$nPeaks, levels=plotDF$nPeaks)
+
+plotDF$perc <- round((plotDF$freq/sum(plotDF$freq)*100),1)
+plotDF$lab.ypos <- (cumsum(c(0, plotDF$perc)) + c(plotDF$perc / 2, .01))[1:length(plotDF$perc)]
+
+
+
+
+ggplot(plotDF, aes(x="", y=perc, fill = nPeaks)) +
+  viridis::scale_fill_viridis(discrete = T, direction=-1) +
+  geom_col(color = 'black',
+           position = position_stack(reverse = T),
+            show.legend = F) +
+  ggrepel::geom_text_repel(aes(x = 1.4, y = lab.ypos, label = nPeaks),
+                           nudge_x = .2,
+                           segment.size = .7,
+                           show.legend = F) +
+  geom_text(aes(x = rep(1.2, nrow(plotDF)), y = lab.ypos,
+                label = perc),
+            size=4, color = "white") +
+  coord_polar('y', start = 0.1) +
+  labs(title="peaks per construct") +
+  theme_void()
+
+kable(plotDF[,1:3], align = 'c') %>% kable_styling(latex_options = "hold_position")
+```
+
+In total, there were `r 12000 - plotDF$freq[1]` constructs with at least one peak. 
+
+To make the peak signals between GTP KCl and NaCl comparable I had to normalize them to the expression strength of the harboring constructs. For this purpose, I determined the expression strength of the constructs by summing up all read counts on the 200 nts. I also added for each peak located in the constructs a pseudo count of 1 to the constructs. In addition for the second approach I merged the biological replicates by summing up the counts.
+
+```{r constructReadCounts, fig.width=10, fig.height=4}
+#12.000 rows x 12 columns
+constructReadCounts <- lapply(RTstop.profiling.l, sum) %>%
+  do.call("cbind", .) %>%
+  as.data.frame %>% 
+  dplyr::select(dplyr::starts_with("GTP")) %>%
+  tibble::rownames_to_column() %>%
+  dplyr::rename(constructID = rowname)
+
+
+pseudoCounts <- peaksPerConstruct$Freq[match(constructReadCounts$constructID, peaksPerConstruct$constructID)]
+constructReadCounts[, -1] <- constructReadCounts[, -1] + pseudoCounts
+
+constructReadCounts$GTP_KCL_merge <- rowSums(cbind(constructReadCounts$GTP_KCL_rep1, constructReadCounts$GTP_KCL_rep2, constructReadCounts$GTP_KCL_rep3)) 
+constructReadCounts$GTP_NaCL_merge <- rowSums(cbind(constructReadCounts$GTP_NaCL_rep1, constructReadCounts$GTP_NaCL_rep2, constructReadCounts$GTP_NaCL_rep3)) 
+
+constructReadCounts %>% pivot_longer(., cols=starts_with("GTP"), names_to="experiment", values_to = "readCounts") %>%
+  mutate(experiment = forcats::fct_relevel(experiment, "GTP_KCL_rep1", "GTP_KCL_rep2", "GTP_KCL_rep3", "GTP_KCL_merge",
+                       "GTP_NaCL_rep1", "GTP_NaCL_rep2", "GTP_NaCL_rep3", "GTP_NaCL_merge"))  %>%
+  ggplot(., aes(x=log2(readCounts+1))) +
+  geom_histogram(bins=50) +
+  facet_wrap(~experiment, ncol=4, nrow=2) +
+  labs(y="Frequency") +
+  ggplot.theme.no.legend
+
+```
+
+
+# Normalization of peak signal
+
+After determination of the construct expression strengths and the peak signals I normalized the peak signal to the expression strength by dividing the signal by the expression strength.
+
+```{r normalizePeakSignal, fig.width=10, fig.height=4}
+matchedIndices <- match(seqnames(peaksRanges) %>% as.character, constructReadCounts$constructID)
+
+peaksRanges$GTP_KCL_rep1_norm <- peaksRanges$GTP_KCL_rep1/constructReadCounts$GTP_KCL_rep1[matchedIndices]
+peaksRanges$GTP_KCL_rep2_norm <- peaksRanges$GTP_KCL_rep2/constructReadCounts$GTP_KCL_rep2[matchedIndices]
+peaksRanges$GTP_KCL_rep3_norm <- peaksRanges$GTP_KCL_rep3/constructReadCounts$GTP_KCL_rep3[matchedIndices]
+
+peaksRanges$GTP_NaCL_rep1_norm <- peaksRanges$GTP_NaCL_rep1/constructReadCounts$GTP_NaCL_rep1[matchedIndices]
+peaksRanges$GTP_NaCL_rep2_norm <- peaksRanges$GTP_NaCL_rep2/constructReadCounts$GTP_NaCL_rep2[matchedIndices]
+peaksRanges$GTP_NaCL_rep3_norm <- peaksRanges$GTP_NaCL_rep3/constructReadCounts$GTP_NaCL_rep3[matchedIndices]
+
+peaksRanges$GTP_KCL_merge_norm <- peaksRanges$GTP_KCL_merge/constructReadCounts$GTP_KCL_merge[matchedIndices]
+peaksRanges$GTP_NaCL_merge_norm <- peaksRanges$GTP_NaCL_merge/constructReadCounts$GTP_NaCL_merge[matchedIndices]
+
+peaksRanges %>% as.data.frame %>% pivot_longer(., cols=ends_with("norm"), names_to="experiment", values_to = "normPeakSignal") %>%
+  mutate(experiment = forcats::fct_relevel(experiment, "GTP_KCL_rep1_norm", "GTP_KCL_rep2_norm", "GTP_KCL_rep3_norm", "GTP_KCL_merge_norm",
+                       "GTP_NaCL_rep1_norm", "GTP_NaCL_rep2_norm", "GTP_NaCL_rep3_norm", "GTP_NaCL_merge_norm"))  %>%
+  ggplot(., aes(x=normPeakSignal)) +
+  geom_histogram(bins=50) +
+  facet_wrap(~experiment, ncol=4, nrow=2) +
+  labs(y="Frequency") +
+  ggplot.theme.no.legend
+```
+
+\pagebreak 
+
+To have a feeling for the similarity of experiments and replicates, I performed a PCA on the log2-transformed normalized peak signals. I also used untransformed signals, which does not make a huge difference.
+
+```{r PCA, fig.width=8, fig.height=3}
+
+matrixPCA <- peaksRanges %>% as.data.frame %>% dplyr::select(ends_with("_norm") & contains("rep")) %>% as.matrix %>% t
+
+
+resPCA <- PCA(matrixPCA,  graph = F)
+indPCA <- get_pca_ind(resPCA)
+eigPCA <- get_eig(resPCA) %>% round(., 1)
+
+plotDF <- data.frame(dim1=indPCA$coord[,1],
+                     dim2=indPCA$coord[,2],
+                     exp=strsplit(rownames(indPCA$coord), "_") %>% sapply(., function(v){v[c(1,2)] %>% paste0(., collapse="_")}),
+                     rep=strsplit(rownames(indPCA$coord), "_") %>% sapply(., function(v){v[3]}))
+
+plotDF$exp <- factor(plotDF$exp, levels = plotDF$exp %>% unique)
+plotDF$rep <- factor(plotDF$rep, levels = plotDF$rep %>% unique)
+  
+untransformedPlot <- plotDF %>%
+  ggplot(., aes(x=dim1, y=dim2, fill=exp)) + geom_point(pch=21, size = 3) + ggplot.theme +
+  scale_fill_manual(values=c("GTP_KCL" = "#1b8904", "GTP_NaCL" = "#0a1fb3")) +
+  scale_shape_manual(values=c(21, 22, 23)) +
+  labs(x=paste0("PC1 (", eigPCA[1,2], "%)"), y=paste0("PC2 (", eigPCA[2,2], "%)"), title = "untransformed")
+
+
+resPCAlog2 <- PCA(matrixPCA %>% log2,  graph = F)
+indPCAlog2 <- get_pca_ind(resPCAlog2)
+eigPCAlog2 <- get_eig(resPCAlog2) %>% round(., 1)
+
+plotDFlog2 <- data.frame(dim1=indPCAlog2$coord[,1],
+                     dim2=indPCAlog2$coord[,2],
+                     exp=strsplit(rownames(indPCAlog2$coord), "_") %>% sapply(., function(v){v[c(1,2)] %>% paste0(., collapse="_")}),
+                     rep=strsplit(rownames(indPCAlog2$coord), "_") %>% sapply(., function(v){v[3]}))
+
+plotDFlog2$exp <- factor(plotDFlog2$exp, levels = plotDFlog2$exp %>% unique)
+plotDFlog2$rep <- factor(plotDFlog2$rep, levels = plotDFlog2$rep %>% unique)
+  
+transformedPlot <- plotDFlog2 %>%
+  ggplot(., aes(x=dim1, y=dim2, fill=exp)) + geom_point(pch=21, size = 3) + ggplot.theme +
+  scale_fill_manual(values=c("GTP_KCL" = "#1b8904", "GTP_NaCL" = "#0a1fb3")) +
+  scale_shape_manual(values=c(21, 22, 23)) +
+  labs(x=paste0("PC1 (", eigPCAlog2[1,2], "%)"), y=paste0("PC2 (", eigPCAlog2[2,2], "%)"), title = "log2-transformed")
+
+ggarrange(plots=list(untransformedPlot, transformedPlot), ncol=2, nrow=1)
+
+```
+
+# Differentially regulated peaks between KCl and NaCl
+
+In the final step the log2FC of the normalized peak signals between KCl and NaCl were calculated. From (putative) G4s I would expect an upregulation. 
+
+As mentioned I followed two approaches. In the "merged" approach the replicates were merged right at the beginning (before normalization), while in the "unmerged" approach the replicates were merged after normalization. As we can see, the approaches are pretty similar. For all upcoming analyses I used the "unmerged" approach.
+
+```{r log2FC, fig.width=10, fig.height=4}
+peaksRanges$log2FC_unmerged <- log2(
+  rowMeans(cbind(peaksRanges$GTP_KCL_rep1_norm, peaksRanges$GTP_KCL_rep2_norm, peaksRanges$GTP_KCL_rep3_norm)) /
+    rowMeans(cbind(peaksRanges$GTP_NaCL_rep1_norm, peaksRanges$GTP_NaCL_rep2_norm, peaksRanges$GTP_NaCL_rep3_norm))
+  )
+peaksRanges$log2FC_merged <- log2(peaksRanges$GTP_KCL_merge_norm / peaksRanges$GTP_NaCL_merge_norm)
+
+plot1 <- peaksRanges %>% as.data.frame %>% pivot_longer(., cols=starts_with("log2FC"), names_to="approach", values_to = "log2FC") %>%
+  mutate(experiment = forcats::fct_relevel(approach, "log2FC_unmerged", "log2FC_merged"))  %>%
+  ggplot(., aes(x=log2FC)) +
+  geom_histogram(bins=50) +
+  geom_vline(xintercept=1, size=.5, linetype="dashed") +
+  geom_vline(xintercept=-1, size=.5, linetype="dashed") +
+  facet_wrap(~approach, ncol=4, nrow=2) +
+  labs(y="Frequency") +
+  ggplot.theme.no.legend
+
+plot2 <- peaksRanges %>% as.data.frame %>% 
+  ggplot(., aes(x=log2FC_unmerged, y=log2FC_merged)) +
+  geom_pointdensity() +
+  geom_vline(xintercept=1, size=.5, linetype="dashed") +
+  geom_vline(xintercept=-1, size=.5, linetype="dashed") +
+  geom_hline(yintercept=1, size=.5, linetype="dashed") +
+  geom_hline(yintercept=-1, size=.5, linetype="dashed") +
+  scale_color_viridis() +
+  labs(x="log2FC_unmerged", y="log2FC_merged") +
+  ggplot.theme.no.legend
+
+ggarrange(plot1, plot2, widths = c(1,.5), ncol=2, nrow=1)
+
+data.frame(Regulation=c("upregulated (log2FC >= 1)", "not regulated (-1 < log2FC < 1)", "downregulated (log2FC <= -1)"),
+           Frequency=c(sum(peaksRanges$log2FC_unmerged >= 1),
+                       sum(peaksRanges$log2FC_unmerged < 1 & peaksRanges$log2FC_unmerged > -1),
+                       sum(peaksRanges$log2FC_unmerged <= -1))) %>%
+  dplyr::mutate(Fraction=Frequency/sum(Frequency)) %>%
+  kable(., align = 'c') %>% kable_styling(latex_options = "hold_position")
+
+constructWisePeakslog2FC <- (peaksRanges - 1) %>% as.data.frame %>% split(., .$seqnames)
+
+```
+
+\FloatBarrier
+\pagebreak
+
+To link the regulation to the normalized peak signal, I prepared MA plots. In the left plot I used for the x-axis the mean of normalized signal of all samples (KCl and NaCl), while for the plot on the right I only used the KCl samples. 
+
+We can see that the downregulated peaks have a much lower normalized signals than the upregulated genes and this especially in the KCl samples. 
+
+```{r MAplot, fig.width=6, fig.height=2}
+
+#KCl and NaCl
+plotDF <- peaksRanges %>%
+  as.data.frame %>%
+  dplyr::mutate(meanNormSignalKClAndNaCl = rowMeans(dplyr::select(., dplyr::ends_with("norm")))) %>%
+  dplyr::mutate(meanNormSignalOnlyKCl = rowMeans(dplyr::select(., intersect(starts_with('GTP_KCl') , ends_with('norm'))))) %>%
+  dplyr::select(., meanNormSignalKClAndNaCl, meanNormSignalOnlyKCl, log2FC_unmerged)
+plotDF$regulation <- "no"
+plotDF$regulation[plotDF$log2FC_unmerged >= 1] <- "up"
+plotDF$regulation[plotDF$log2FC_unmerged <= -1] <- "down"
+plotDF$regulation <- factor(plotDF$regulation, levels=c("no", "up", "down"))
+plotDF <- plotDF %>% dplyr::arrange(regulation)
+plot1 <- plotDF %>% 
+  ggplot(., aes(x=meanNormSignalKClAndNaCl, y=log2FC_unmerged, color=regulation)) +
+  geom_hline(yintercept = 1, linetype="dashed", size=.5) +
+  geom_hline(yintercept = -1, linetype="dashed", size=.5) +
+  geom_point() +
+  scale_color_manual(values=c("up"="#00A087FF", "down" = "#E64B35FF", "no" = "#D4D4D4")) +
+  labs(x="mean of normalized signals (KCl and NaCl replicates)",
+       y="log2FC") +
+  ggplot.theme.no.legend
+
+#only KCl
+plot2 <- plotDF %>% 
+  ggplot(., aes(x=meanNormSignalOnlyKCl, y=log2FC_unmerged, color=regulation)) +
+  geom_hline(yintercept = 1, linetype="dashed", size=.5) +
+  geom_hline(yintercept = -1, linetype="dashed", size=.5) +
+  geom_point() +
+  scale_color_manual(values=c("up"="#00A087FF", "down" = "#E64B35FF", "no" = "#D4D4D4")) +
+  labs(x="mean of normalized signals (only KCl)",
+       y="log2FC") +
+  ggplot.theme.no.legend
+
+ggarrange(plot1, plot2, ncol=2, nrow=1)
+```
+\pagebreak
+
+# Sequence composition
+
+The top250 up- (log2FC $\ge$ 1) and downregulated (log2FC $\le$ - 1) peaks were gathered and their nucleotide composition analyzed in varying windows. In addition, 250 randomly sampled non-regulated peaks were gathered (-.25 < log2FC < .25 and mean normalized signal in the KCl replicates > $\ge .25$).
+
+```{r sequenceCompositionTopUpandDown, fig.width = 10, fig.height=2}
+topUp <- (peaksRanges - 1) %>%
+  as.data.frame %>%
+  dplyr::filter(., log2FC_unmerged >= 1) %>%
+  arrange(., desc(log2FC_unmerged)) %>%
+  dplyr::top_n(., n=250)
+
+topDown <- (peaksRanges- 1) %>%
+  as.data.frame %>%
+  dplyr::filter(., log2FC_unmerged <= -1) %>%
+  arrange(., log2FC_unmerged) %>%
+  dplyr::top_n(., n=250)
+
+set.seed(123)
+random <- (peaksRanges - 1) %>%
+  as.data.frame %>%
+  dplyr::rowwise() %>%
+  dplyr::filter(., mean(c(GTP_KCL_rep1_norm, GTP_KCL_rep2_norm, GTP_KCL_rep3_norm)) >= .25) %>%
+  dplyr::ungroup() %>%
+  dplyr::filter(., log2FC_unmerged > -.25 & log2FC_unmerged < .25) %>%
+  dplyr::sample_n(., 250) %>% 
+  as.data.frame
+  
+
+seqsUp <- constructInformation$Seq[match(topUp$seqnames, constructInformation$Construct.ID)]
+seqsDown <- constructInformation$Seq[match(topDown$seqnames, constructInformation$Construct.ID)]
+seqsRandom <- constructInformation$Seq[match(random$seqnames, constructInformation$Construct.ID)]
+
+adjacentNucs <- 1
+
+peakSeqsUp <- substr(seqsUp, start=topUp$start-adjacentNucs, stop=topUp$start+adjacentNucs)
+peakSeqsDown <- substr(seqsDown, start=topDown$start-adjacentNucs, stop=topDown$start+adjacentNucs)
+peakSeqsRandom <- substr(seqsRandom, start=random$start-adjacentNucs, stop=random$start+adjacentNucs)
+
+plot1 <- ggarrange(
+  ggplot() +
+    geom_logo(peakSeqsUp) +
+    scale_x_continuous(breaks = seq(1,nchar(peakSeqsUp[1]),1), labels = seq(-floor(nchar(peakSeqsUp[1])/2), floor(nchar(peakSeqsUp[1])/2), 1)) +
+    ylim(0,2) +
+    labs(x="Position relative to peak center", title=paste0("Top", length(peakSeqsUp)," upregulated")) +
+    ggplot.theme.no.legend,
+  ggplot() +
+    geom_logo(peakSeqsDown) +
+    scale_x_continuous(breaks = seq(1,nchar(peakSeqsDown[1]),1), labels = seq(-floor(nchar(peakSeqsDown[1])/2), floor(nchar(peakSeqsDown[1])/2), 1)) +
+    ylim(0,2) +
+    labs(x="Position relative to peak center", title=paste0("Top", length(peakSeqsDown)," downregulated")) +
+    ggplot.theme.no.legend,
+  ggplot() +
+    geom_logo(peakSeqsRandom) +
+    scale_x_continuous(breaks = seq(1,nchar(peakSeqsRandom[1]),1), labels = seq(-floor(nchar(peakSeqsRandom[1])/2), floor(nchar(peakSeqsRandom[1])/2), 1)) +
+    ylim(0,2) +
+    labs(x="Position relative to peak center", title=paste0(length(peakSeqsRandom)," non-regulated")) +
+    ggplot.theme.no.legend,
+  ncol=3,
+  nrow=1
+)
+  
+
+
+adjacentNucs <- 5
+
+peakSeqsUp <- substr(seqsUp, start=topUp$start-adjacentNucs, stop=topUp$start+adjacentNucs)
+peakSeqsDown <- substr(seqsDown, start=topDown$start-adjacentNucs, stop=topDown$start+adjacentNucs)
+peakSeqsRandom <- substr(seqsRandom, start=random$start-adjacentNucs, stop=random$start+adjacentNucs)
+
+plot2 <- ggarrange(
+  ggplot() +
+    geom_logo(peakSeqsUp) +
+    scale_x_continuous(breaks = seq(1,nchar(peakSeqsUp[1]),1), labels = seq(-floor(nchar(peakSeqsUp[1])/2), floor(nchar(peakSeqsUp[1])/2), 1)) +
+    ylim(0,2) +
+    labs(x="Position relative to peak center", title=paste0("Top", length(peakSeqsUp)," upregulated")) +
+    ggplot.theme.no.legend,
+  ggplot() +
+    geom_logo(peakSeqsDown) +
+    scale_x_continuous(breaks = seq(1,nchar(peakSeqsDown[1]),1), labels = seq(-floor(nchar(peakSeqsDown[1])/2), floor(nchar(peakSeqsDown[1])/2), 1)) +
+    ylim(0,2) +
+    labs(x="Position relative to peak center", title=paste0("Top", length(peakSeqsDown)," downregulated")) +
+    ggplot.theme.no.legend,
+  ggplot() +
+    geom_logo(peakSeqsRandom) +
+    scale_x_continuous(breaks = seq(1,nchar(peakSeqsRandom[1]),1), labels = seq(-floor(nchar(peakSeqsRandom[1])/2), floor(nchar(peakSeqsRandom[1])/2), 1)) +
+    ylim(0,2) +
+    labs(x="Position relative to peak center", title=paste0(length(peakSeqsRandom)," non-regulated")) +
+    ggplot.theme.no.legend,
+  ncol=3,
+  nrow=1
+)
+
+
+
+adjacentNucs <- 10
+
+peakSeqsUp <- substr(seqsUp, start=topUp$start-adjacentNucs, stop=topUp$start+adjacentNucs)
+peakSeqsDown <- substr(seqsDown, start=topDown$start-adjacentNucs, stop=topDown$start+adjacentNucs)
+peakSeqsRandom <- substr(seqsRandom, start=random$start-adjacentNucs, stop=random$start+adjacentNucs)
+
+plot2 <- ggarrange(
+  ggplot() +
+    geom_logo(peakSeqsUp) +
+    scale_x_continuous(breaks = seq(1,nchar(peakSeqsUp[1]),2), labels = seq(-floor(nchar(peakSeqsUp[1])/2), floor(nchar(peakSeqsUp[1])/2), 2)) +
+    ylim(0,2) +
+    labs(x="Position relative to peak center", title=paste0("Top", length(peakSeqsUp)," upregulated")) +
+    ggplot.theme.no.legend,
+  ggplot() +
+    geom_logo(peakSeqsDown) +
+    scale_x_continuous(breaks = seq(1,nchar(peakSeqsDown[1]),2), labels = seq(-floor(nchar(peakSeqsDown[1])/2), floor(nchar(peakSeqsDown[1])/2), 2)) +
+    ylim(0,2) +
+    labs(x="Position relative to peak center", title=paste0("Top", length(peakSeqsDown)," downregulated")) +
+    ggplot.theme.no.legend,
+  ggplot() +
+    geom_logo(peakSeqsRandom) +
+    scale_x_continuous(breaks = seq(1,nchar(peakSeqsRandom[1]),2), labels = seq(-floor(nchar(peakSeqsRandom[1])/2), floor(nchar(peakSeqsRandom[1])/2), 2)) +
+    ylim(0,2) +
+    labs(x="Position relative to peak center", title=paste0(length(peakSeqsRandom)," non-regulated")) +
+    ggplot.theme.no.legend,
+  ncol=3,
+  nrow=1
+)
+
+
+
+adjacentNucs <- 15
+
+peakSeqsUp <- substr(seqsUp, start=topUp$start-adjacentNucs, stop=topUp$start+adjacentNucs)
+peakSeqsDown <- substr(seqsDown, start=topDown$start-adjacentNucs, stop=topDown$start+adjacentNucs)
+peakSeqsRandom <- substr(seqsRandom, start=random$start-adjacentNucs, stop=random$start+adjacentNucs)
+
+plot2 <- ggarrange(
+  ggplot() +
+    geom_logo(peakSeqsUp) +
+    scale_x_continuous(breaks = seq(1,nchar(peakSeqsUp[1]),5), labels = seq(-floor(nchar(peakSeqsUp[1])/2), floor(nchar(peakSeqsUp[1])/2), 5)) +
+    ylim(0,2) +
+    labs(x="Position relative to peak center", title=paste0("Top", length(peakSeqsUp)," upregulated")) +
+    ggplot.theme.no.legend,
+  ggplot() +
+    geom_logo(peakSeqsDown) +
+    scale_x_continuous(breaks = seq(1,nchar(peakSeqsDown[1]),5), labels = seq(-floor(nchar(peakSeqsDown[1])/2), floor(nchar(peakSeqsDown[1])/2), 5)) +
+    ylim(0,2) +
+    labs(x="Position relative to peak center", title=paste0("Top", length(peakSeqsDown)," downregulated")) +
+    ggplot.theme.no.legend,
+  ggplot() +
+    geom_logo(peakSeqsRandom) +
+    scale_x_continuous(breaks = seq(1,nchar(peakSeqsRandom[1]),5), labels = seq(-floor(nchar(peakSeqsRandom[1])/2), floor(nchar(peakSeqsRandom[1])/2), 5)) +
+    ylim(0,2) +
+    labs(x="Position relative to peak center", title=paste0(length(peakSeqsRandom)," non-regulated")) +
+    ggplot.theme.no.legend,
+  ncol=3,
+  nrow=1
+)
+
+
+
+```
+
+\pagebreak
+
+# Examples
+
+Here are some examples including the strongest up- and downregulated genes as well as constructs located in AKR1A1 and Myl6.
+
+```{r examples, fig.width=10, fig.height=10}
+
+shinyPreviewPlot <- function(constructID, title){
+  plotList <- lapply(c("GTP_KCL_rep1", "GTP_KCL_rep2", "GTP_KCL_rep3",
+         "GTP_NaCL_rep1", "GTP_NaCL_rep2", "GTP_NaCL_rep3"),
+       function(exp){
+         
+         plot <- cbind(pos=1:200, readCounts=RTstop.profiling.l[[exp]][[constructID]] %>% as.numeric) %>% as.data.frame %>% 
+           ggplot(., aes(x=pos, y=readCounts)) +
+           geom_col(fill=experiment_cols[exp]) +
+           coord_cartesian(xlim=c(1,200), expand=F) +
+           scale_x_continuous(breaks=seq(0,200,10)) +
+           labs(title=exp) +
+           ggplot.theme.no.legend
+         return(plot)
+       })
+
+log2FCplot <- constructWisePeakslog2FC[[constructID]] %>% dplyr::rename(pos=start, log2FC=log2FC_unmerged) %>%
+  ggplot(., aes(x=pos, y=log2FC)) +
+  coord_cartesian(xlim=c(1,200), expand=F) +
+  scale_x_continuous(breaks=seq(0,200,10)) +
+  geom_hline(yintercept=0, size=.5) +
+  geom_col(width=2.5) +
+  ggplot.theme.no.legend
+
+plotList[[7]] <- log2FCplot
+ggarrange(plots = plotList, ncol=1, nrow=7, top=title)
+}
+
+
+shinyPreviewPlot(which.max(peaksRanges$log2FC_unmerged) %>% names, "maxUp")
+shinyPreviewPlot(which.min(peaksRanges$log2FC_unmerged) %>% names, "maxDown")
+
+#AKR1A1
+shinyPreviewPlot("00268", "AKR1A1")
+shinyPreviewPlot("01045", "Myl6")
+
+```
+
+
+# Storing results
+
+Results are stored as ../rds/constructWisePeaksLog2FC.rds with the following structure.
+
+```{r saveRDS}
+#Remove non necessary columns
+constructWisePeakslog2FC <- constructWisePeakslog2FC %>% lapply(., function(df){
+  df <- df[,c("start", "log2FC_unmerged")] %>%
+    dplyr::rename(., peakCenter = start, log2FC=log2FC_unmerged)
+  })
+
+saveRDS(constructWisePeakslog2FC, "../rds/constructWisePeaksLog2FC.rds")
+```
+
+\pagebreak
+
+# Session Information
+
+```{r}
+sessionInfo()
+```
