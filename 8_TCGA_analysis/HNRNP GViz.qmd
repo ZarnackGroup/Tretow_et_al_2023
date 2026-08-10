@@ -1,0 +1,173 @@
+---
+title: "Analysis of ENCODE eCLIP data in conjunction with SE introns and SE genes"
+#subtitle: " "
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+author:
+  - name: Jonas Busam
+    affiliations:
+      - name: Faculty of Biological Sciences, Goethe University Frankfurt
+format: 
+  html:
+    code-fold: true
+    code-overflow: scroll
+    code-summary: "Show code"
+    code-tools: true
+    code-line-numbers: true
+    code-block-bg: true
+    code-block-border-left: true
+    
+    toc: true
+    toc-depth: 4
+    toc-location: left
+    toc-expand: true
+    number-sections: true
+    
+    theme:
+      light: [flatly, ../scripts/light.scss]
+      dark: [darkly, ../scripts/dark.scss]
+    grid:
+      sidebar-width: 300px
+      body-width: 900px
+      margin-width: 100px
+    fontsize: 11pt
+    linestretch: 1.5
+        
+    fig-format: png
+    cap-location: margin
+    crossref:
+      fig-title: Fig.
+      labels: arabic
+    df-print: kable
+    
+    #keep-md: true
+    embed-resources: true
+    link-external-newwindow: true
+    smooth-scroll: true
+    execute:
+      warning: false
+      message: false
+    
+    # Bold Fig. + Number
+    include-after-body: 
+      text: |
+        <script>
+          document.addEventListener("DOMContentLoaded", () => {
+            document.querySelectorAll("figcaption").forEach(e => {e.innerHTML = e.innerHTML.replace(/^(Fig.&nbsp;\d+)/, "<strong>$1</strong>")})
+          });
+        </script>
+---
+
+```{r setup}
+library(GenomicFeatures)
+library(GenomicRanges)
+library(GenomeInfoDb)
+library(Gviz)
+library(txdbmaker)
+library(rtracklayer)
+library(viridis)
+library(tidyverse)
+
+clean_name <- function(x){x %>% basename() %>% sub("(.*?)\\..*$", "\\1", .)}
+removeVersion <- function(withversion){
+    return((withversion %>% str_split(., "\\.", simplify=T))[,1])
+}
+
+bw_path <- "/Users/jb/data/HNPRNPH/additional analysis/coverage"
+
+if(file.exists("~/data/speckles/rds/annotation.rds")){
+  gtf.gr <- readRDS("~/data/speckles/rds/annotation.rds")
+}else{
+  anno <- read.table("~/data/speckles/gencode.v46.annotation.gtf.gz", sep="\t", quote="") %>% 
+    mutate(chr=V1, type=V3, start=V4, stop=V5, strand=V7, phase=V8, metadata=V9, .keep="none")
+  anno$gene_id <- str_extract(anno$metadata, "(?<=gene_id ).*?(?=\\;)")
+  anno$gene_type <- str_extract(anno$metadata, "(?<=gene_type ).*?(?=\\;)")
+  anno$gene_name <- str_extract(anno$metadata, "(?<=gene_name ).*?(?=\\;)")
+  anno$level <- str_extract(anno$metadata, "(?<=level ).*?(?=\\;)")
+  anno$transcript_id <- str_extract(anno$metadata, "(?<=transcript_id ).*?(?=\\;)")
+  anno$transcript_type <- str_extract(anno$metadata, "(?<=transcript_type ).*?(?=\\;)")
+  anno$transcript_support_level <- str_extract(anno$metadata, "(?<=transcript_support_level ).*?(?=\\;)")
+  anno$tag <- str_extract_all(anno$metadata, "(?<=tag ).*?(?=\\;)") %>% sapply(paste, collapse = " ")
+  gtf.gr <- makeGRangesFromDataFrame(anno, keep.extra.columns=T)
+  saveRDS(gtf.gr, "~/data/speckles/rds/annotation.rds")
+}
+gtf.gr$gene_id <- removeVersion(gtf.gr$gene_id)
+
+cols <- c("royalblue", "darkorange", "goldenrod")
+
+makePlot <- function(gene, start=-1, end=-1, flank_l=0, flank_r=0, snp_start=-1, snp_end=-1, splice_start=-1, splice_end=-1, ylim=1000, title, only_principal=T){
+  strand <- strand(gtf.gr[gtf.gr$gene_name == gene & gtf.gr$type=="gene"]) %>% as.character()
+  subgtf <- gtf.gr[gtf.gr$gene_name == gene]
+  if(only_principal){subgtf <- as.data.frame(subgtf) %>% filter((grepl("appris_principal", tag)|grepl("basic", tag)) & !grepl("RNA_Seq_supported_only", tag)) %>% makeGRangesFromDataFrame(keep.extra.columns=T)
+  }else{subgtf <- as.data.frame(subgtf) %>% makeGRangesFromDataFrame(keep.extra.columns=T)}
+  #subgtf <- subgtf %>% subset(transcript_id %in% c("ENST00000308298.11", "ENST00000308127.9","ENST00000532881.5"))
+  if(NROW(subgtf)==0){return(NULL)}
+  subgtf$phase <- as.integer(0)
+  anno <- makeTxDbFromGRanges(subgtf)
+  range <- GRanges(seqnames=unique(seqnames(subgtf)), strand=strand, ranges=IRanges(min(start(subgtf)), max(end(subgtf))))
+  
+  gtrack <- GenomeAxisTrack()
+  regiontrack <- GeneRegionTrack(anno, chromosome=as.character(seqnames(range)), transcriptAnnotation="symbol", nshowId=F, name="annotation", background.title="gray20")
+  gene(regiontrack) <- strsplit(gene(regiontrack),".",fixed=T) %>% sapply("[[",1)
+  tryCatch(mysymbols <- unlist(mapIds(org.Hs.eg.db, gene(regiontrack), "SYMBOL", "ENSEMBL", multiVals = "first")),
+           error=function(e){mysymbols <<- setNames(rep(gene, length(gene(regiontrack))), gene(regiontrack))})
+  symbol(regiontrack) <- mysymbols[gene(regiontrack)]
+
+  currentbw <- lapply(list.files(bw_path, full.names=T), function(i){import(i, which=range) %>% keepStandardChromosomes()})
+  names(currentbw) <- list.files(bw_path) %>% clean_name()
+  #ylim <- max(sapply(currentbw, function(i){max(i$score)}))
+  datatrack1 <- DataTrack(range=currentbw[["KD_10000"]], name="KD_10000", fill=cols[[1]], lwd=1, col.histogram=cols[[1]], col=cols[[1]], fontsize=11, background.title=cols[[1]],
+                          start=start(range)-flank_l, end=end(range)+flank_r, type="hist", baseline=0, lwd.baseline=2, ylim=c(0,ylim))
+  datatrack2 <- DataTrack(range=currentbw[["KD_Ctrl"]], name="KD_Ctrl", fill=cols[[2]], lwd=1, col.histogram=cols[[2]], col=cols[[2]], fontsize=11, background.title=cols[[2]],
+                          start=start(range)-flank_l, end=end(range)+flank_r, type="hist", baseline=0, lwd.baseline=2, ylim=c(0,ylim))
+  
+  if(strand=="+"){currentbw_clip <- import("/Users/jb/data/HNPRNPH/additional analysis/HNRNPH_Xlinks_merge_plus.bw", which=range) %>% keepStandardChromosomes()
+  }else{currentbw_clip <- import("/Users/jb/data/HNPRNPH/additional analysis/HNRNPH_Xlinks_merge_minus.bw", which=range) %>% keepStandardChromosomes()}
+  datatrack_clip <- DataTrack(range=currentbw_clip, name="HNRNPH\nxlinks", fill=cols[[3]], lwd=1, col.histogram=cols[[3]], col=cols[[3]], fontsize=11, background.title=cols[[3]],
+                              start=start(range)-flank_l, end=end(range)+flank_r, type="hist", baseline=0, lwd.baseline=2)
+  
+  peaks <- import("/Users/jb/data/HNPRNPH/additional analysis/iCLIP_peaks.bed", format="bed", which=range) 
+  peak_track <- AnnotationTrack(range=peaks, name="iCLIP peaks", stacking="dense", fill=cols[[3]], lwd=1, col=cols[[3]], fontsize=10, rotation.title=0, size=2, background.title=cols[[3]])
+  
+  ht <- HighlightTrack(trackList=list(datatrack1, datatrack2, datatrack_clip, peak_track, regiontrack), start=c(snp_start, splice_start), end=c(snp_end, splice_end), 
+                             chromosome=seqnames(range), fill=c("red", "blue"), col=c("red", "blue"), alpha=c(1, 0.1))
+  #ht <- HighlightTrack(trackList=list(datatrack1, datatrack2, datatrack_clip, peak_track, regiontrack), start=snp_start, end=snp_end, 
+  #                           chromosome=seqnames(range), fill="red", col="red", alpha=1)
+  plotTracks(trackList = c(gtrack, ht), from=start-flank_l, to=end+flank_r, chromosome=seqnames(range) %>% as.character(), main=title, shape="box", cex.main=1.5)
+}
+```
+
+# Coverage plots
+
+::: .panel-tabset
+```{r}
+#| output: asis
+#majiq <- readRDS("/Users/jb/data/HNPRNPH/Tretow_et_al_2023/2_MAJIQ_AS_analysis/rds_files/regulatedEvents.rds")
+#majiq2 <- readRDS("/Users/jb/data/HNPRNPH/Tretow_et_al_2023/2_MAJIQ_AS_analysis/rds_files/MAJIQ_binaryEvents.rds")
+#new_events <- read.table("/Users/jb/Downloads/annotated_breast_cancer_associated_rG4_weakening_variants_hnrnph_genomic_windows.tsv", skip=1)
+
+set <- c("HNRNPA2B1", "SSH3", "SYTL2", "EPN3", "EPN3", "EPN3", "RCE1", "RCE1", "DNM2", "DNM2", "LZTR1", "LZTR1", "DGAT1", "DGAT1")
+snps <- c(26192511, 67310190, 85725527, 50532871, 50532871, 50532871, 66845330, 66845330, 10831698, 10831698, 20994286, 20994286, 144315121, 144315121)
+splice_start <- c(26192339, 67310099, 85726469, 50532985, 50532985, 50532985, 0, 0, 0, 0, 0, 0, 0, 0)
+splice_end <- c(26192494, 67310163, 85727895, 50536421, 50536421, 50536421, 0, 0, 0, 0, 0, 0, 0, 0)
+flank_l <- c(200, 200, 3000, 4000, 1000, 400, 400, 4000, 400, 4000, 400, 4000, 400, 4000)
+flank_r <- c(200, 200, 3000, 4000, 4000, 4000, 400, 4000, 400, 4000, 400, 4000, 400, 4000)
+ylim <- c(80000, 6000, 9000, 5000, 5000, 5000, 3000, 5000, 10000, 10000, 400, 800, 400, 8000)
+title <- c("HNRNPA2B1 (7:26192511:G:A)", "SSH3 (11:67310190:G:T)", "SYTL2 (11:85725527:A:C)", "EPN3 (17:50532871:G:T)", "EPN3 (17:50532871:G:T)", "EPN3 (17:50532871:G:T)", "RCE1 (11:66845330:T:C)", "RCE1 (11:66845330:T:C)", "DNM2 (19:10831698:G:A)", "DNM2 (19:10831698:G:A)", "LZTR1 (22:20994286:G:C)", "LZTR1 (22:20994286:G:C)", "DGAT1 (8:144315121:G:A)", "DGAT1 (8:144315121:G:A)")
+
+#pdf("~/Desktop/test.pdf", width=10, height=5)
+for(i in 2){
+    cat('\n###', set[[i]], '\n')
+    makePlot(gene=set[[i]], start=snps[[i]], end=snps[[i]], flank_l=flank_l[[i]], flank_r=flank_r[[i]], snp_start=c(snps[[i]]), snp_end=c(snps[[i]]), 
+             splice_start=splice_start[[i]], splice_end=splice_end[[i]], ylim=ylim[[i]], title=title[[i]], only_principal=F)
+    cat("\n\n")
+}
+#dev.off()
+```
+:::
+
+# Additional code and session details
+```{r, code=readLines('~/R/scripts/functions.R',warn=F)}
+```
+```{r}
+sessionInfo()
+```
