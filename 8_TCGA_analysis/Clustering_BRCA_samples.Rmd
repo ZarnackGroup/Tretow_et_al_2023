@@ -47,7 +47,7 @@ myTheme <- theme_bw() +
 ```
 
 ```{r paths}
-projectDir <- "/Users/mariokeller/projects/HNRNPH_project/Tretow_et_al_2023"
+projectDir <- "/Users/jb/data/HNPRNPH/Tretow_et_al_2023"
 
 majiqDir <- paste0(projectDir, "/2_MAJIQ_AS_analysis")
 tcgaDir <- paste0(projectDir, "/8_TCGA_analysis")
@@ -125,7 +125,7 @@ Splicing events are reduced to those of the category "Coop-Enh" and
 "Coop-Rep".
 
 ```{r}
-# Remove the quantifications of the HNRNPH1 NMD Isoform and 
+# Remove the quantifications of the HNRNPH1 NMD isoform and 
 #   the non-regulated CE events
 PSIs <- PSIs %>% 
     dplyr::filter(hillCat %in% c("Coop-Enh", "Coop-Rep"))
@@ -503,6 +503,60 @@ adjustedRandIndices %>%
              y="Adjusted Rand Index\nBasal samples") + 
         guides(fill = guide_legend(title.position = "top", title.hjust = 0.5))
 ```
+
+# Survival analysis
+```{r}
+library(survival)
+library(survminer)
+
+df <- HNRNPHexpression %>% left_join(metaInformation, by = c("tcgaPatientBarcode" = "tcga.xml_bcr_patient_barcode")) %>% 
+    filter(sampleType == "Primary Tumor") %>%
+    mutate(OS.time = coalesce(tcga.gdc_cases.diagnoses.days_to_death, tcga.gdc_cases.diagnoses.days_to_last_follow_up), 
+           OS.event = ifelse(tcga.gdc_cases.diagnoses.vital_status == "dead", 1, 0), 
+           HNRNPH1.group = case_when(HNRNPH1 <= quantile(HNRNPH1, 0.25, na.rm=T) ~ "Low", HNRNPH1 >= quantile(HNRNPH1, 0.75, na.rm=T) ~ "High", TRUE ~ NA), #HNRNPH1.group = ifelse(HNRNPH1 >= median(HNRNPH1, na.rm = TRUE), "High", "Low"),
+           HNRNPH2.group = case_when(HNRNPH2 <= quantile(HNRNPH2, 0.25, na.rm=T) ~ "Low", HNRNPH2 >= quantile(HNRNPH2, 0.75, na.rm=T) ~ "High", TRUE ~ NA)) #HNRNPH2.group = ifelse(HNRNPH2 >= median(HNRNPH2, na.rm = TRUE), "High", "Low"))
+
+dfnmd <- HNRNPH1nmdIsoformPSIs %>% left_join(metaInformation, by = c("tcgaPatientBarcode" = "tcga.xml_bcr_patient_barcode")) %>% 
+    filter(sampleType == "Primary Tumor") %>%
+    mutate(OS.time = coalesce(tcga.gdc_cases.diagnoses.days_to_death, tcga.gdc_cases.diagnoses.days_to_last_follow_up), 
+           OS.event = ifelse(tcga.gdc_cases.diagnoses.vital_status == "dead", 1, 0), 
+           HNRNPH1NMD.group = case_when(PSI <= quantile(PSI, 0.25, na.rm=T) ~ "Low", PSI >= quantile(PSI, 0.75, na.rm=T) ~ "High", TRUE ~ NA), #HNRNPH1.group = ifelse(PSI >= median(PSI, na.rm = TRUE), "High", "Low"))
+           PSI10 = 10*PSI) 
+
+fit_1 <- survfit(Surv(OS.time, OS.event) ~ HNRNPH1.group, data = filter(df, !is.na(HNRNPH1.group)))
+fit_2 <- survfit(Surv(OS.time, OS.event) ~ HNRNPH2.group, data = filter(df, !is.na(HNRNPH2.group)))
+fit_1nmd <- survfit(Surv(OS.time, OS.event) ~ HNRNPH1NMD.group, data = filter(dfnmd, !is.na(HNRNPH1NMD.group)))
+
+ggsurvplot(fit_1, data=df, pval=T, title="HNRNPH1 expression")
+ggsurvplot(fit_2, data=df, pval=T, title="HNRNPH2 expression")
+ggsurvplot(fit_1nmd, data=dfnmd, pval=T, title="HNRNPH1 NMD PSIs")
+
+# Cox Proportional Hazards Model
+fulldf <- left_join(df, dfnmd, by="tcgaPatientBarcode")
+cox <- coxph(Surv(OS.time.x, OS.event.x) ~ HNRNPH1 + HNRNPH2 + PSI10, data = fulldf)
+summary(cox)
+
+newdat <- data.frame(HNRNPH1 = c(quantile(fulldf$HNRNPH1, 0.25, na.rm=T), quantile(fulldf$HNRNPH1, 0.75, na.rm=T)),
+                     HNRNPH2 = median(fulldf$HNRNPH2, na.rm=T),
+                     PSI10 = median(fulldf$PSI10, na.rm=T))
+fit <- survfit(cox, newdata = newdat)
+ggsurvplot(fit, data = fulldf, conf.int=F, legend.labs = c("Low HNRNPH1", "High HNRNPH1"))
+
+newdat <- data.frame(HNRNPH1 = median(fulldf$HNRNPH1, na.rm=T),
+                     HNRNPH2 = c(quantile(fulldf$HNRNPH2, 0.25, na.rm=T), quantile(fulldf$HNRNPH2, 0.75, na.rm=T)),
+                     PSI10 = median(fulldf$PSI10, na.rm=T))
+fit <- survfit(cox, newdata = newdat)
+ggsurvplot(fit, data = fulldf, conf.int=F, legend.labs = c("Low HNRNPH2", "High HNRNPH2"))
+
+newdat <- data.frame(HNRNPH1 = median(fulldf$HNRNPH1, na.rm=T),
+                     HNRNPH2 = median(fulldf$HNRNPH2, na.rm=T),
+                     PSI10 = c(quantile(fulldf$PSI10, 0.25, na.rm=T), quantile(fulldf$PSI10, 0.75, na.rm=T)))
+fit <- survfit(cox, newdata = newdat)
+ggsurvplot(fit, data = fulldf, conf.int=F, legend.labs = c("Low HNRNPH1 NMD PSI", "High HNRNPH1 NMD PSI"))
+
+ggforest(cox, data = fulldf)
+```
+
 
 # Session Information
 

@@ -160,6 +160,30 @@ ggplot(HNRNPHexpression %>% dplyr::filter(sampleType == "Primary Tumor"), aes(x=
     labs(x="HNRNPH1 expression (vst)", y="HNRNPH2 expression (vst)") +
     myTheme +
     theme(aspect.ratio=1)
+#ggsave(filename = "~/Desktop/H/final/1.pdf")
+
+HNRNPH1nmdIsoformPSIs <- readRDS(paste0(tcgaDir,"/rds_files/BRCA_PSI.rds")) %>% dplyr::filter(eventType == "HNRNPH1nmdIsoform")
+
+plotdf <- left_join(HNRNPHexpression, HNRNPH1nmdIsoformPSIs, by="tcgaSampleBarcode")
+ggplot(plotdf %>% dplyr::filter(sampleType.x == "Primary Tumor"), aes(x=HNRNPH1, y=PSI)) +
+    rasterise(geom_pointdensity(size=3), dpi=300) +
+    geom_smooth(method="lm", se=FALSE) +
+    scale_color_viridis() +
+    stat_cor() +
+    labs(x="HNRNPH1 expression (vst)", y="HNRNPH1 NMD PSI") +
+    myTheme +
+    theme(aspect.ratio=1)
+#ggsave(filename = "~/Desktop/H/final/2.pdf")
+
+ggplot(plotdf %>% dplyr::filter(sampleType.x == "Primary Tumor"), aes(x=HNRNPH2, y=PSI)) +
+    rasterise(geom_pointdensity(size=3), dpi=300) +
+    geom_smooth(method="lm", se=FALSE) +
+    scale_color_viridis() +
+    stat_cor() +
+    labs(x="HNRNPH2 expression (vst)", y="HNRNPH1 NMD PSI") +
+    myTheme +
+    theme(aspect.ratio=1)
+#ggsave(filename = "~/Desktop/H/final/3.pdf")
 ```
 
 # Correlations between *HNRNPH1/2* and Enhanced, Repressed and Ctrl events
