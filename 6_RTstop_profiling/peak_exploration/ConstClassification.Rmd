@@ -58,6 +58,8 @@ library(edgeR)
 library(ggrastr)
 library(ggnewscale)
 library(BindingSiteFinder)
+library(Biostrings)
+library(ggpubr)
 ```
 
 ```{r}
@@ -524,12 +526,12 @@ df = resChange
 
 dfTopUp = df %>% 
   subset(sig == TRUE) %>% 
-  arrange(desc(log2FoldChange)) %>% 
+  arrange(dplyr::desc(log2FoldChange)) %>% 
   head(n = 10)
 
 dfTopDown = df %>% 
   subset(sig == TRUE) %>% 
-  arrange((desc(log2FoldChange))) %>% 
+  arrange((dplyr::desc(log2FoldChange))) %>% 
   tail(n = 10)
 
 p1 = ggplot() +
@@ -581,14 +583,14 @@ p1 + p2
 
 ```{r, fig.width=12, fig.height=4, fig.cap="\\textbf{MA and volcano variations}"}
 # MA-Plot variations
-dfUpper = df %>% select(baseMean, log2FoldChange, sig)%>%
+dfUpper = df %>% dplyr::select(baseMean, log2FoldChange, sig)%>%
   filter(log2FoldChange > 0, sig == T) %>%
   mutate(bm2 = round(log2(baseMean))) %>%
   group_by(bm2) %>%
   summarise(mlfc = min(log2FoldChange)) %>%
   filter(bm2 < 8 & bm2 > 1)
 
-dfLower = df %>% select(baseMean, log2FoldChange, sig)%>%
+dfLower = df %>% dplyr::select(baseMean, log2FoldChange, sig)%>%
   filter(log2FoldChange < 0, sig == T) %>%
   mutate(bm2 = round(log2(baseMean))) %>%
   group_by(bm2) %>%
@@ -765,7 +767,7 @@ dfTotal = rbind(df1,df2,df3,df4,df5,df6,df7,df8,df9,df10) %>%
   mutate(total = sum(n)) %>%
   mutate(per = round((n/total)*100, digits = 1)) %>%
   as.data.frame() %>%
-  select(type, sig, n, per)
+  dplyr::select(type, sig, n, per)
 dfTotal2 = format(dfTotal, big.mark = ",", small.mark = ".")
 colnames(dfTotal2) = c("Type", "Selection", "#N", "%")
 kable(dfTotal2, caption = "Construct subclassification -new.")
@@ -782,7 +784,7 @@ dfAssignment2$status = ifelse(dfAssignment2$expressionStatus == "Not expressed",
                                             )
                                      )
                               )
-dfAssignment2 = dfAssignment2 %>% select(constructID, status)
+dfAssignment2 = dfAssignment2 %>% dplyr::select(constructID, status)
 
 # append construct info list by G4 status
 idx = match(constructInfo$Construct.ID, dfAssignment2$constructID)
@@ -883,8 +885,8 @@ p1 + p2 + p3 + patchwork::plot_layout(guides = "collect") & theme(legend.positio
 allResConst = mcols(peaks_expressed) %>% 
   as.data.frame() 
 allResConst = unique(allResConst$constructID)
-tmp1 = constructInfo2 %>% subset(constructID %in% allResConst) %>% select(Region.ID, constructID, status) 
-tmp2 = constructInfo2 %>% subset(constructID %in% allResConst) %>% select(Region.ID) 
+tmp1 = constructInfo2 %>% subset(constructID %in% allResConst) %>% dplyr::select(Region.ID, constructID, status) 
+tmp2 = constructInfo2 %>% subset(constructID %in% allResConst) %>% dplyr::select(Region.ID) 
 
 tmpSplit = split(tmp2, tmp1$status)
 
@@ -1068,7 +1070,7 @@ mcols(G4Peaks)$GTP_NACL_peak = cov$`4_GTP_NACL`[idx] + cov$`5_GTP_NACL`[idx] + c
 df = G4Peaks %>%
   as.data.frame() %>%
   tibble::rownames_to_column("PeakID") %>%
-  select(PeakID, constructID, log2FoldChange, GTP_KCL_total, GTP_NACL_total, GTP_KCL_peak, GTP_NACL_peak) %>%
+  dplyr::select(PeakID, constructID, log2FoldChange, GTP_KCL_total, GTP_NACL_total, GTP_KCL_peak, GTP_NACL_peak) %>%
   mutate(GTP_KCL_ratio = GTP_KCL_peak / GTP_KCL_total) %>%
   mutate(GTP_NACL_ratio = GTP_NACL_peak / GTP_NACL_total)
 
@@ -1108,7 +1110,7 @@ p1 + p2 + p3
 ```{r, fig.width=6 ,fig.height=3, fig.cap="\\textbf{Density of ratios.} G4 Peaks only."}
 df = mcols(G4Peaks) %>% 
   as.data.frame() %>%
-  select(GTP_KCL_ratio, GTP_NACL_ratio) %>%
+  dplyr::select(GTP_KCL_ratio, GTP_NACL_ratio) %>%
   pivot_longer(everything())
 
 ggplot(df, aes(x = log2(value), fill = name)) +
@@ -1126,10 +1128,10 @@ G4Peaks$nPeaks = tmp$n[idx]
 
 df = mcols(G4Peaks) %>%
   as.data.frame() %>% 
-  select(nPeaks, log2FoldChange, GTP_KCL_ratio, GTP_NACL_ratio, GTP_KCL_total, GTP_NACL_total, GTP_KCL_peak, GTP_NACL_peak) %>%
+  dplyr::select(nPeaks, log2FoldChange, GTP_KCL_ratio, GTP_NACL_ratio, GTP_KCL_total, GTP_NACL_total, GTP_KCL_peak, GTP_NACL_peak) %>%
   mutate(nPeaks = factor(nPeaks, levels = c(1:(max(nPeaks))))) %>%
   mutate(FoldChange = log2FoldChange^2) %>%
-  select(-log2FoldChange) %>%
+  dplyr::select(-log2FoldChange) %>%
   pivot_longer(-nPeaks)
 
 p1 = ggplot(df) +
@@ -1143,7 +1145,7 @@ p1 = ggplot(df) +
 
 df = mcols(G4Peaks) %>%
   as.data.frame() %>% 
-  select(nPeaks) %>%
+  dplyr::select(nPeaks) %>%
   mutate(nPeaks = factor(nPeaks, levels = c(1:10)))
 
 p1 
@@ -1180,7 +1182,7 @@ mcols(G4PeaksAll)$GTP_NACL_peak = cov$`4_GTP_NACL`[idx] + cov$`5_GTP_NACL`[idx] 
 df = G4PeaksAll %>%
   as.data.frame() %>%
   tibble::rownames_to_column("PeakID") %>%
-  select(PeakID, constructID, log2FoldChange, GTP_KCL_total, GTP_NACL_total, GTP_KCL_peak, GTP_NACL_peak) %>%
+  dplyr::select(PeakID, constructID, log2FoldChange, GTP_KCL_total, GTP_NACL_total, GTP_KCL_peak, GTP_NACL_peak) %>%
   mutate(GTP_KCL_ratio = GTP_KCL_peak / GTP_KCL_total) %>%
   mutate(GTP_NACL_ratio = GTP_NACL_peak / GTP_NACL_total)
 
@@ -1220,7 +1222,7 @@ p1 + p2 + p3
 ```{r, fig.width=6 ,fig.height=3, fig.cap="\\textbf{Density of ratios.} All peaks on G4 containing constructs."}
 df = mcols(G4PeaksAll) %>% 
   as.data.frame() %>%
-  select(GTP_KCL_ratio, GTP_NACL_ratio) %>%
+  dplyr::select(GTP_KCL_ratio, GTP_NACL_ratio) %>%
   pivot_longer(everything())
 
 ggplot(df, aes(x = log2(value), fill = name)) +
@@ -1238,11 +1240,11 @@ G4PeaksAll$nPeaks = tmp$n[idx]
 
 df = mcols(G4PeaksAll) %>%
   as.data.frame() %>% 
-  select(nPeaks, log2FoldChange, GTP_KCL_ratio, GTP_NACL_ratio, GTP_KCL_total, GTP_NACL_total, GTP_KCL_peak, GTP_NACL_peak) %>%
+  dplyr::select(nPeaks, log2FoldChange, GTP_KCL_ratio, GTP_NACL_ratio, GTP_KCL_total, GTP_NACL_total, GTP_KCL_peak, GTP_NACL_peak) %>%
   mutate(nPeaks = ifelse(nPeaks > 10, 10, nPeaks)) %>%
   mutate(nPeaks = factor(nPeaks, levels = c(1:(max(nPeaks))))) %>%
   mutate(FoldChange = log2FoldChange^2) %>%
-  select(-log2FoldChange) %>%
+  dplyr::select(-log2FoldChange) %>%
   pivot_longer(-nPeaks)
 
 p1 = ggplot(df) +
@@ -1257,7 +1259,7 @@ p1 = ggplot(df) +
 
 df = mcols(G4PeaksAll) %>%
   as.data.frame() %>% 
-  select(nPeaks) %>%
+  dplyr::select(nPeaks) %>%
   mutate(nPeaks = ifelse(nPeaks > 10, 10, nPeaks)) %>%
   mutate(nPeaks = factor(nPeaks, levels = c(1:10)))
 
@@ -1287,7 +1289,7 @@ df = G4Peaks %>%
            log2FoldChange, padj, baseMean,
            status
            ) %>%
-  select(1:16)
+  dplyr::select(1:16)
 
 write.xlsx(df, file = "g4peaklist.xlsx", sheetName = "G4Peaks")
 saveRDS(G4Peaks, file = "G4Peaks.rds")
@@ -1353,6 +1355,19 @@ p1 + p2 + p3
 ```
 
 ```{r, fig.width=12, fig.height=8, fig.cap="\\textbf{G4 motif on different sets of constructs.}"}
+# add total construct read counts for each peak
+idx = match(peaks_expressed$constructID, rownames(m))
+mcols(peaks_expressed)$GTP_KCL_total = m$GTP_KCL_rep1[idx] + m$GTP_KCL_rep2[idx] + m$GTP_KCL_rep3[idx]
+mcols(peaks_expressed)$GTP_NACL_total = m$GTP_NaCL_rep1[idx] + m$GTP_NaCL_rep2[idx] + m$GTP_NaCL_rep3[idx]
+# add read coutns per peak
+idx = match(names(peaks_expressed), names(cov))
+mcols(peaks_expressed)$GTP_KCL_peak = cov$`1_GTP_KCL`[idx] + cov$`2_GTP_KCL`[idx] + cov$`3_GTP_KCL`[idx]
+mcols(peaks_expressed)$GTP_NACL_peak = cov$`4_GTP_NACL`[idx] + cov$`5_GTP_NACL`[idx] + cov$`6_GTP_NACL`[idx]
+
+peaks_expressed <- peaks_expressed %>% as.data.frame %>% 
+  mutate(GTP_KCL_ratio = GTP_KCL_peak / GTP_KCL_total) %>% mutate(GTP_NACL_ratio = GTP_NACL_peak / GTP_NACL_total) %>% 
+  makeGRangesFromDataFrame(keep.extra.columns=T)
+
 set1 = subset(peaks_expressed, status == "Not Significant")
 set2 = subset(peaks_expressed, status == "Significant-Up")
 set3 = subset(peaks_expressed, status == "Significant-Down")
@@ -1438,10 +1453,10 @@ p6 = ggplot() +
 (p1 + p2 + p3) / (p4 + p5 + p6)
 
 p1
-ggsave(filename = "~/Desktop/H/final/1.pdf")
+#ggsave(filename = "~/Desktop/H/final/1.pdf")
 
 p6
-ggsave(filename = "~/Desktop/H/final/2.pdf")
+#ggsave(filename = "~/Desktop/H/final/2.pdf")
 
 A <- colMeans(mat1 == "A")
 C <- colMeans(mat1 == "C")
@@ -1456,7 +1471,7 @@ ggplot(df %>% pivot_longer(c(G,C,U,A)), aes(position, value, color=name)) +
     scale_color_manual(values=c('#109648', '#255C99', '#F7B32B', '#D62839'))+
     ggtitle("Frequency of bases (other)")+
     theme_bw()
-ggsave(filename = "~/Desktop/H/final/3.pdf")
+#ggsave(filename = "~/Desktop/H/final/3.pdf")
 
 A <- colMeans(mat6 == "A")
 C <- colMeans(mat6 == "C")
@@ -1471,56 +1486,76 @@ ggplot(df %>% pivot_longer(c(G,C,U,A)), aes(position, value, color=name)) +
     scale_color_manual(values=c('#109648', '#255C99', '#F7B32B', '#D62839'))+
     ggtitle("Frequency of bases (rG4)")+
     theme_bw()
-ggsave(filename = "~/Desktop/H/final/4.pdf")
+#ggsave(filename = "~/Desktop/H/final/4.pdf")
 ```
 
 
 
 ```{r, fig.width=12, fig.height=6, fig.cap="\\textbf{G4 Peaks split by KCL ratio.}"}
-q = quantile(G4Peaks$GTP_KCL_ratio, probs = seq(0, 1, by = 0.1))
-s = findInterval(G4Peaks$GTP_KCL_ratio, q, all.inside = TRUE)
-mcols(G4Peaks)$GTP_KCL_ratio_bin = s
-splitPeaks = split(G4Peaks, G4Peaks$GTP_KCL_ratio_bin)
+q = quantile(set6$GTP_KCL_ratio, probs = seq(0, 1, by = 0.2))
+s = findInterval(set6$GTP_KCL_ratio, q, all.inside = TRUE)
+#q = seq(0, 1, by = 0.2)
+#s = findInterval(set6$GTP_NACL_ratio, q, all.inside = TRUE)
+mcols(set6)$GTP_KCL_ratio_bin = s
+splitPeaks = split(set6, set6$GTP_KCL_ratio_bin)
 df = lapply(splitPeaks, function(x){
-  getPeakSeq(x, adjacentNucs = 6, trimRight = 5)
+  getPeakSeq(x, adjacentNucs = 17, trimRight = 16)
 })
-p1 = ggseqlogo(df, ncol = 10) +
-  geom_hline(yintercept = 2, linetype = "dashed") +
-  labs(subtitle = "Split by quantile - 10% of data") 
+p1 = ggseqlogo(df, ncol = 5, method="probability", rev_stack_order=T) +
+  scale_x_continuous(breaks = c(3, 7, 11, 15, 19), labels = c(-16, -12, -8, -4, 0))+
+  geom_hline(yintercept = 1.2, linetype = "dashed") +
+  labs(subtitle = "Split by quantile - 20% of data") 
 
-lenDf = data.frame(set = names(sapply(df, length)), l = sapply(df, length))
-lenDf$set = factor(lenDf$set, levels = c(1:10))
-p10 = ggplot(lenDf, aes(x = set, y = l)) +
-  geom_col() +
-  theme_nice() +
-  theme(legend.position = "none") +
-  labs(x = "Set", y = "#N")
-
-
-q = seq(0, 1, by = 0.1)
-s = findInterval(G4Peaks$GTP_KCL_ratio, q, all.inside = TRUE)
-mcols(G4Peaks)$GTP_KCL_ratio_bin = s
-splitPeaks = split(G4Peaks, G4Peaks$GTP_KCL_ratio_bin)
+q = quantile(set1$GTP_KCL_ratio, probs = seq(0, 1, by = 0.2))
+s = findInterval(set1$GTP_KCL_ratio, q, all.inside = TRUE)
+#q = seq(0, 1, by = 0.2)
+#s = findInterval(set1$GTP_NACL_ratio, q, all.inside = TRUE)
+mcols(set1)$GTP_KCL_ratio_bin = s
+splitPeaks = split(set1, set1$GTP_KCL_ratio_bin)
 df = lapply(splitPeaks, function(x){
-  getPeakSeq(x, adjacentNucs = 6, trimRight = 5)
+  getPeakSeq(x, adjacentNucs = 17, trimRight = 16)
 })
-p2 = ggseqlogo(df, ncol = 10) +
-  geom_hline(yintercept = 2, linetype = "dashed") +
-  labs(subtitle = "Split by ratio - 10% steps")
+p2 = ggseqlogo(df, ncol = 5, method="probability", rev_stack_order=T) +
+  scale_x_continuous(breaks = c(3, 7, 11, 15, 19), labels = c(-16, -12, -8, -4, 0))+
+  geom_hline(yintercept = 1.2, linetype = "dashed") +
+  labs(subtitle = "Split by quantile - 20% of data") 
 
-lenDf = data.frame(set = names(sapply(df, length)), l = sapply(df, length))
-lenDf$set = factor(lenDf$set, levels = c(1:10))
-p20 = ggplot(lenDf, aes(x = set, y = l)) +
-  geom_col() +
-  theme_nice() +
-  theme(legend.position = "none") +
-  labs(x = "Set", y = "#N")
+ggpubr::ggarrange(p1, p2 ,ncol=1, nrow=2, common.legend=T, legend="right")
+ggsave(filename = "~/Desktop/4.pdf")
 
-p1 + p10 + p2 + p20 + plot_layout(widths = c(4, 1))
+# lenDf = data.frame(set = names(sapply(df, length)), l = sapply(df, length))
+# lenDf$set = factor(lenDf$set, levels = c(1:10))
+# p10 = ggplot(lenDf, aes(x = set, y = l)) +
+#   geom_col() +
+#   theme_nice() +
+#   theme(legend.position = "none") +
+#   labs(x = "Set", y = "#N")
+
+
+#q = seq(0, 1, by = 0.2)
+#s = findInterval(G4Peaks$GTP_KCL_ratio, q, all.inside = TRUE)
+#mcols(G4Peaks)$GTP_KCL_ratio_bin = s
+#splitPeaks = split(G4Peaks, G4Peaks$GTP_KCL_ratio_bin)
+#df = lapply(splitPeaks, function(x){
+#  getPeakSeq(x, adjacentNucs = 6, trimRight = 5)
+#})
+#p2 = ggseqlogo(df, ncol = 10) +
+#  geom_hline(yintercept = 2, linetype = "dashed") +
+#  labs(subtitle = "Split by ratio - 20% steps")
+
+#lenDf = data.frame(set = names(sapply(df, length)), l = sapply(df, length))
+#lenDf$set = factor(lenDf$set, levels = c(1:10))
+#p20 = ggplot(lenDf, aes(x = set, y = l)) +
+#  geom_col() +
+#  theme_nice() +
+#  theme(legend.position = "none") +
+#  labs(x = "Set", y = "#N")
+
+#p1  + p2  + plot_layout(widths = c(4, 1))
 ```
 
 ```{r, fig.width=12, fig.height=6, fig.cap="\\textbf{G4 Peaks split by NaCl ratio.}"}
-q = quantile(G4Peaks$GTP_NACL_ratio, probs = seq(0, 1, by = 0.1))
+q = quantile(G4Peaks$GTP_NACL_ratio, probs = seq(0, 1, by = 0.2))
 s = findInterval(G4Peaks$GTP_NACL_ratio, q, all.inside = TRUE)
 mcols(G4Peaks)$GTP_NACL_ratio_bin = s
 splitPeaks = split(G4Peaks, G4Peaks$GTP_NACL_ratio_bin)
@@ -1529,7 +1564,7 @@ df = lapply(splitPeaks, function(x){
 })
 p1 = ggseqlogo(df, ncol = 10) +
   geom_hline(yintercept = 2, linetype = "dashed") +
-  labs(subtitle = "Split by quantile - 10% of data") 
+  labs(subtitle = "Split by quantile - 20% of data") 
 
 lenDf = data.frame(set = names(sapply(df, length)), l = sapply(df, length))
 lenDf$set = factor(lenDf$set, levels = c(1:10))
@@ -1540,7 +1575,7 @@ p10 = ggplot(lenDf, aes(x = set, y = l)) +
   labs(x = "Set", y = "#N")
 
 
-q = seq(0, 1, by = 0.1)
+q = seq(0, 1, by = 0.2)
 s = findInterval(G4Peaks$GTP_NACL_ratio, q, all.inside = TRUE)
 mcols(G4Peaks)$GTP_NACL_ratio_bin = s
 splitPeaks = split(G4Peaks, G4Peaks$GTP_NACL_ratio_bin)
@@ -1549,7 +1584,7 @@ df = lapply(splitPeaks, function(x){
 })
 p2 = ggseqlogo(df, ncol = 10) +
   geom_hline(yintercept = 2, linetype = "dashed") +
-  labs(subtitle = "Split by ratio - 10% steps")
+  labs(subtitle = "Split by ratio - 20% steps")
 
 lenDf = data.frame(set = names(sapply(df, length)), l = sapply(df, length))
 lenDf$set = factor(lenDf$set, levels = c(1:10))
@@ -1563,7 +1598,7 @@ p1 + p10 + p2 + p20 + plot_layout(widths = c(4, 1))
 ```
 
 ```{r, fig.width=12, fig.height=6, fig.cap="\\textbf{G4 Peaks split by LFC.}"}
-q = quantile(G4Peaks$log2FoldChange, probs = seq(0, 1, by = 0.1))
+q = quantile(G4Peaks$log2FoldChange, probs = seq(0, 1, by = 0.2))
 s = findInterval(G4Peaks$log2FoldChange, q, all.inside = TRUE)
 mcols(G4Peaks)$log2FoldChange_bin = s
 splitPeaks = split(G4Peaks, G4Peaks$log2FoldChange_bin)
@@ -1572,7 +1607,7 @@ df = lapply(splitPeaks, function(x){
 })
 p1 = ggseqlogo(df, ncol = 10) +
   geom_hline(yintercept = 2, linetype = "dashed") +
-  labs(subtitle = "Split by quantile - 10% of data") 
+  labs(subtitle = "Split by quantile - 20% of data") 
 
 lenDf = data.frame(set = names(sapply(df, length)), l = sapply(df, length))
 lenDf$set = factor(lenDf$set, levels = c(1:10))
