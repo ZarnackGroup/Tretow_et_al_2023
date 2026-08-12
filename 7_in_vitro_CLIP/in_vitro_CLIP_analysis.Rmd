@@ -8,9 +8,13 @@ output:
       toc: TRUE
       toc_float: TRUE
       code_folding: hide
+      execute:
+        warning: false
+        message: false
 editor_options: 
   markdown: 
     wrap: 72
+
 ---
 
 ```{r setup, include=FALSE}
@@ -502,6 +506,7 @@ ggplot(combined_plot, aes(x=set, y=enrichment, col=anno)) +
     facet_wrap(~facet, ncol=2) +
     scale_y_continuous(breaks=seq(-8, 8, 4)) +
     coord_cartesian(ylim=c(-8.5, 5.5)) +
+    labs(x = "pqsfinder")+
     myTheme + 
     theme(aspect.ratio=1/1, 
               axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
@@ -524,6 +529,7 @@ ggplot(plot_2, aes(x=set2, y=enrichment, col=anno)) +
     facet_wrap(~facet, ncol=2) +
     scale_y_continuous(breaks=seq(-8, 8, 4)) +
     coord_cartesian(ylim=c(-8.5, 5.5)) +
+    labs(x = "G4mer")+
     myTheme + 
     theme(aspect.ratio=1/1, 
               axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
@@ -550,6 +556,24 @@ ggplot(plot_2, aes(x=enrichment, y=G4mer, color=anno))+
     theme(aspect.ratio=1/1, 
               axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
               legend.position = "bottom")
+
+variants <- read_csv("/Users/jb/data/HNPRNPH/additional analysis/G4mer/rG4_disrupting_hnrnp_regions_breast_cancer_associated_pmbb_variants.csv")
+
+# Reshape wt_score and mutated_score into one column
+plot_df <- variants %>% select(snp, wt_score, mutated_score) %>% distinct() %>% 
+    pivot_longer(cols = c(wt_score, mutated_score), names_to = "type", values_to = "score") %>%
+    mutate(type = factor(type, levels = c("wt_score", "mutated_score")))
+
+# Make the grouped bar plot
+ggplot(plot_df, aes(x = snp, y = score, fill = type)) +
+    geom_col(position = "dodge") +
+    geom_hline(yintercept=0.5, lty=2)+
+    labs(x = "SNP", y = "Score", fill = "Type") +
+    scale_fill_manual(values = c("wt_score" = "darkgrey", "mutated_score" = "goldenrod3"),
+                      labels = c("wt_score" = "WT", "mutated_score" = "MT")) +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), aspect.ratio = 1)
+ggsave("/Users/jb/data/HNPRNPH/additional analysis/G4mer/a.pdf")
 
 #openxlsx::write.xlsx(left_join(Combined %>% mutate(ID=as.numeric(ID)), csv %>% mutate(G4mer_label=as.logical(G4mer_label)) %>% dplyr::select(!sequence), by=join_by("ID" == "Construct.ID")), 
 #                     file="/Users/jb/data/HNPRNPH/additional analysis/RTstop_with_strengths.xlsx")
